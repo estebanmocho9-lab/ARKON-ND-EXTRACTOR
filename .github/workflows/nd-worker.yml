@@ -1,0 +1,42 @@
+name: ND Worker
+on:
+  workflow_dispatch:
+    inputs:
+      documento_id:
+        description: 'ID o nombre del PDF; vacío = siguiente PDF'
+        required: false
+        default: ''
+  schedule:
+    - cron: '23 03 * * *'
+concurrency:
+  group: nd-worker
+  cancel-in-progress: false
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    permissions:
+      contents: read
+    env:
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+      CARPETA_MADRE_DRIVE_ID: ${{ secrets.CARPETA_MADRE_DRIVE_ID }}
+      ND_SHEETS_FOLDER_ID: ${{ secrets.ND_SHEETS_FOLDER_ID }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      GEMINI_MODEL: gemini-2.5-flash
+      ND_DOCUMENTO_ID: ${{ inputs.documento_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install --no-audit --no-fund
+      - name: Validar configuración
+        run: |
+          test -n "$GOOGLE_SERVICE_ACCOUNT_JSON"
+          test -n "$CARPETA_MADRE_DRIVE_ID"
+          test -n "$ND_SHEETS_FOLDER_ID"
+          test -n "$GEMINI_API_KEY"
+          echo ND_CONFIG_OK
+      - name: Ejecutar extracción ND
+        run: npm run worker:nd
