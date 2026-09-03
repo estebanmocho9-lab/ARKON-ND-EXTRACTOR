@@ -1,0 +1,3 @@
+export type NDKind = 'MATERIAL'|'COMPONENTE'|'PROPIEDAD'|'MAGNITUD'|'ATRIBUTO'|'RELACION'|'CONDICION'|'METODO'|'INSTRUMENTO'|'APLICACION'|'COMPORTAMIENTO'|'NORMA'|'DEFINICION'|'EVIDENCIA'|'FORMULA'|'ENTIDAD';
+export interface NDFinding { kind: NDKind; field: string; entity: string; aspect: string; documentaryData: string; originalText: string; normalizedText: string; value?: number; valueText?: string; unit?: string; symbol?: string; context: string; page: number; section?: string; confidence: number; evidence: { fragment: string; page: number; section?: string; start?: number; end?: number; }; metadata?: Record<string, unknown>; }
+export interface NDDocument { id:string; name:string; mimeType:string; sizeMB:number; }
