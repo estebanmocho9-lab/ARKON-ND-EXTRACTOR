@@ -1,4 +1,4 @@
-const OUTPUT_FOLDER_ID = '14k2IDsMYV_-uNfohvnCKq_YmF0hwGpzY';
+const OUTPUT_FOLDER_ID = '1rFPJb70tSwmm8JQzCI9kBrPycQ7C9Kqt';
 
 function doPost(e) {
   try {
