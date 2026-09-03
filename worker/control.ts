@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import { getOrCreateSheet } from './sheets';
 
 const TAB='JOBS';
 const HEAD=['drive_id','documento','spreadsheet_id','next_page','total_pages','status','updated_at'];
@@ -11,17 +12,20 @@ function getAuth(){
 }
 const auth=getAuth();
 const sheets=google.sheets({version:'v4',auth});
-const drive=google.drive({version:'v3',auth});
 
 async function controlSheetId(){
-  const parent=process.env.ND_SHEETS_FOLDER_ID;
-  if(!parent) throw new Error('Falta ND_SHEETS_FOLDER_ID');
-  const q=`'${parent}' in parents and name='ARKON_ND_CONTROL' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
-  const found=await drive.files.list({q,fields:'files(id)',pageSize:1});
-  if(found.data.files?.[0]?.id) return found.data.files[0].id;
-  const created=await drive.files.create({requestBody:{name:'ARKON_ND_CONTROL',mimeType:'application/vnd.google-apps.spreadsheet',parents:[parent]},fields:'id'});
-  const id=created.data.id!;
-  await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A1:G1`,valueInputOption:'RAW',requestBody:{values:[HEAD]}});
+  // La hoja de control también debe ser propiedad de la cuenta humana
+  // que ejecuta el bootstrap; la cuenta de servicio solo la edita.
+  const id=await getOrCreateSheet('CONTROL','CONTROL');
+  const meta=await sheets.spreadsheets.get({spreadsheetId:id,fields:'sheets.properties'});
+  const have=new Set((meta.data.sheets||[]).map(s=>s.properties?.title));
+  if(!have.has(TAB)){
+    await sheets.spreadsheets.batchUpdate({spreadsheetId:id,requestBody:{requests:[{addSheet:{properties:{title:TAB}}}]}});
+  }
+  const r=await sheets.spreadsheets.values.get({spreadsheetId:id,range:`${TAB}!A1:G1`});
+  if(!r.data.values?.length){
+    await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A1:G1`,valueInputOption:'RAW',requestBody:{values:[HEAD]}});
+  }
   return id;
 }
 
