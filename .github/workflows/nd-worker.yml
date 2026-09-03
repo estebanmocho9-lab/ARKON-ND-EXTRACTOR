@@ -24,7 +24,7 @@ jobs:
       ND_SHEETS_BOOTSTRAP_URL: ${{ secrets.ND_SHEETS_BOOTSTRAP_URL }}
       ND_SHEETS_BOOTSTRAP_TOKEN: ${{ secrets.ND_SHEETS_BOOTSTRAP_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-2.5-flash
+      GEMINI_MODEL: gemini-3.6-flash
       ND_DOCUMENTO_ID: ${{ inputs.documento_id }}
       ND_PAGES_PER_CHUNK: 10
       ND_MAX_PAGES_PER_RUN: 80
