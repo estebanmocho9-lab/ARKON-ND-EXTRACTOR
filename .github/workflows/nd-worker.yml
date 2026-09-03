@@ -21,6 +21,8 @@ jobs:
       GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
       CARPETA_MADRE_DRIVE_ID: ${{ secrets.CARPETA_MADRE_DRIVE_ID }}
       ND_SHEETS_FOLDER_ID: ${{ secrets.ND_SHEETS_FOLDER_ID }}
+      ND_SHEETS_BOOTSTRAP_URL: ${{ secrets.ND_SHEETS_BOOTSTRAP_URL }}
+      ND_SHEETS_BOOTSTRAP_TOKEN: ${{ secrets.ND_SHEETS_BOOTSTRAP_TOKEN }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-2.5-flash
       ND_DOCUMENTO_ID: ${{ inputs.documento_id }}
@@ -39,6 +41,8 @@ jobs:
           test -n "$CARPETA_MADRE_DRIVE_ID"
           test -n "$ND_SHEETS_FOLDER_ID"
           test -n "$GEMINI_API_KEY"
+          test -n "$ND_SHEETS_BOOTSTRAP_URL"
+          test -n "$ND_SHEETS_BOOTSTRAP_TOKEN"
           echo ND_CONFIG_OK
       - name: Ejecutar extracción ND
         run: npm run worker:nd
