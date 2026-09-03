@@ -1,39 +1,10 @@
 'use client';
-
-import { useState } from 'react';
-
-export default function Home() {
-  const [folder, setFolder] = useState('');
-  const [status, setStatus] = useState('Listo para configurar Drive y lanzar el primer lote.');
-
-  async function check() {
-    setStatus(folder.trim() ? 'Configuración recibida. El siguiente paso es conectar el worker ND.' : 'Ingresá el ID de la carpeta madre de Google Drive.');
-  }
-
-  return <main className="shell">
-    <div className="eyebrow">ARKON · ND</div>
-    <h1 className="title">Extractor documental</h1>
-    <p className="subtitle">Sistema independiente para recorrer PDFs, extraer entidades y conservar información documental exhaustiva en Google Sheets. ARKON y NE quedan fuera de este servicio.</p>
-
-    <section className="grid">
-      <div className="card"><h2>Fuente</h2><div className="value">Google Drive</div><div className="muted">PDFs originales sin modificar</div></div>
-      <div className="card"><h2>Extracción</h2><div className="value">ND exhaustiva</div><div className="muted">entidad → aspecto → dato + evidencia</div></div>
-      <div className="card"><h2>Destino</h2><div className="value">Google Sheets</div><div className="muted">una estructura documental por libro/PDF</div></div>
-    </section>
-
-    <section className="panel">
-      <h2>Configurar primera fuente</h2>
-      <p className="muted">Pegá el ID de la carpeta madre de Drive. No hace falta subir los PDFs al sitio.</p>
-      <div className="row">
-        <input className="input" value={folder} onChange={e=>setFolder(e.target.value)} placeholder="ID de carpeta de Google Drive" />
-        <button className="btn" onClick={check}>Verificar</button>
-      </div>
-      <div className="status">{status}</div>
-    </section>
-
-    <section className="panel">
-      <h2>Estado</h2>
-      <p className="muted">La interfaz ya está separada del código de ARKON. Ahora vamos a conectar el worker, checkpoints, límites diarios y escritura por lotes.</p>
-    </section>
-  </main>;
-}
+import {useState} from 'react';
+export default function Home(){
+ const [folder,setFolder]=useState('');const [doc,setDoc]=useState('');const [key,setKey]=useState('');const [status,setStatus]=useState('Listo.');
+ async function launch(){setStatus('Lanzando worker ND…');try{const r=await fetch('/api/jobs',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},body:JSON.stringify({documento_id:doc})});const j=await r.json();if(!r.ok)throw new Error(j.error||'No se pudo lanzar');setStatus(`Worker en cola${doc?` para ${doc}`:' para el siguiente PDF'}.`)}catch(e:any){setStatus(`Error: ${e.message}`)}}
+ return <main className="shell"><div className="eyebrow">ARKON · ND · INDEPENDIENTE</div><h1 className="title">Extractor documental</h1><p className="subtitle">Drive → Gemini → Google Sheets. El procesamiento pesado corre fuera de la página y puede reanudarse por documento. ARKON, NE y Supabase quedan fuera.</p>
+ <section className="grid"><div className="card"><h2>Fuente</h2><div className="value">Google Drive</div><div className="muted">PDF original, solo lectura</div></div><div className="card"><h2>Motor</h2><div className="value">Gemini</div><div className="muted">extracción documental exhaustiva</div></div><div className="card"><h2>Salida</h2><div className="value">Sheets</div><div className="muted">entidad → aspecto → dato + evidencia</div></div></section>
+ <section className="panel"><h2>Lanzar extracción</h2><p className="muted">La configuración real vive como secretos del despliegue. Acá solo indicás el documento si querés forzar uno.</p><div className="row"><input className="input" value={doc} onChange={e=>setDoc(e.target.value)} placeholder="ID o nombre del PDF (opcional)"/><input className="input" value={key} onChange={e=>setKey(e.target.value)} placeholder="Clave del panel" type="password"/><button className="btn" onClick={launch}>Iniciar</button></div><div className="status">{status}</div></section>
+ <section className="panel"><h2>Carpeta configurada</h2><input className="input" value={folder} onChange={e=>setFolder(e.target.value)} placeholder="Solo referencia local: ID de carpeta madre"/><p className="muted">No se envía este valor al worker desde el navegador. La fuente del worker se configura con CARPETA_MADRE_DRIVE_ID.</p></section>
+ </main>}
