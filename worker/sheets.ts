@@ -11,13 +11,15 @@ async function ensure(id:string){const m=await sheets.spreadsheets.get({spreadsh
 async function bootstrapAsUser(name:string){
  const url=process.env.ND_SHEETS_BOOTSTRAP_URL?.trim();
  const token=process.env.ND_SHEETS_BOOTSTRAP_TOKEN?.trim();
- if(!url||!token) return null;
+ if(!url||!token) throw new Error('Falta ND_SHEETS_BOOTSTRAP_URL o ND_SHEETS_BOOTSTRAP_TOKEN');
  const c=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON!);
  const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,name,service_account:c.client_email})});
  const text=await response.text();
- if(!response.ok) throw new Error(`Sheets bootstrap HTTP ${response.status}: ${text.slice(0,300)}`);
- const data=JSON.parse(text);
- if(!data.ok||!data.spreadsheetId) throw new Error(`Sheets bootstrap failed: ${data.error||'sin spreadsheetId'}`);
+ if(!response.ok) throw new Error(`Sheets bootstrap HTTP ${response.status}: ${text.slice(0,500)}`);
+ let data:any;
+ try{data=JSON.parse(text)}catch{throw new Error(`Sheets bootstrap devolvió una respuesta no JSON: ${text.slice(0,300)}`)}
+ if(!data.ok||!data.spreadsheetId) throw new Error(`Sheets bootstrap falló: ${data.error||'sin spreadsheetId'}`);
+ console.log(`ND | Sheets bootstrap OK | ${data.name||name}`);
  return data.spreadsheetId as string;
 }
 
@@ -25,10 +27,11 @@ export async function getOrCreateSheet(driveId:string,name:string){
  const parent=process.env.ND_SHEETS_FOLDER_ID;if(!parent)throw new Error('Falta ND_SHEETS_FOLDER_ID');
  const safe=`ARKON_ND_${name.replace(/[^\\w.-]+/g,'_').slice(0,70)}`;
  const q=`'${parent}' in parents and name='${safe.replace(/'/g,"\\'")}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
- const found=await drive.files.list({q,fields:'files(id)',pageSize:1});
+ const found=await drive.files.list({q,fields:'files(id,name)',pageSize:1});
  let id=found.data.files?.[0]?.id;
  if(!id) id=await bootstrapAsUser(name);
- if(!id){const r=await drive.files.create({requestBody:{name:safe,mimeType:'application/vnd.google-apps.spreadsheet',parents:[parent]},fields:'id'});id=r.data.id!;}
+ // IMPORTANTE: nunca intentamos crear un Sheet con la cuenta de servicio.
+ // Las cuentas de servicio no tienen cuota de Drive para ser propietarias de archivos.
  await ensure(id);return id;
 }
 export async function appendFindings(id:string,driveId:string,name:string,findings:NDFinding[]){if(!findings.length)return;const all=rows(name,driveId,findings);for(let i=0;i<all.length;i+=500){await sheets.spreadsheets.values.append({spreadsheetId:id,range:'HALLAZGOS_RAW!A:S',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:all.slice(i,i+500)}});}
