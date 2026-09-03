@@ -1,4 +1,12 @@
-const OUTPUT_FOLDER_ID = '1rFPJb70tSwmm8JQzCI9kBrPycQ7C9Kqt';
+const OUTPUT_FOLDER_ID = '1rFPJb70tSwmm8JQzCI9kBrPycQ7C9KQt';
+
+function doGet() {
+  return json({
+    ok: true,
+    service: 'ARKON-ND bootstrap',
+    version: '2026-09-03-1'
+  });
+}
 
 function doPost(e) {
   try {
