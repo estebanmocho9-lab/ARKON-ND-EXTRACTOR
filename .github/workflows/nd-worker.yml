@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       documento_id:
-        description: 'ID o nombre del PDF; vacío = siguiente PDF'
+        description: 'ID o nombre del PDF; vacío = continuar pendientes'
         required: false
         default: ''
   schedule:
@@ -14,7 +14,7 @@ concurrency:
 jobs:
   extract:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 55
     permissions:
       contents: read
     env:
@@ -24,6 +24,9 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GEMINI_MODEL: gemini-2.5-flash
       ND_DOCUMENTO_ID: ${{ inputs.documento_id }}
+      ND_PAGES_PER_CHUNK: 10
+      ND_MAX_PAGES_PER_RUN: 80
+      ND_MAX_MINUTES_PER_RUN: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
