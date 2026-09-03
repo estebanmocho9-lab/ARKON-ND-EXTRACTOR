@@ -1,4 +1,5 @@
-import { GoogleGenerativeAI, GoogleAIFileManager } from '@google/generative-ai/server';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleAIFileManager } from '@google/generative-ai/server';
 import type { NDFinding } from './types';
 
 const MODEL=process.env.GEMINI_MODEL||'gemini-2.5-flash';
