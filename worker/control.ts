@@ -1,4 +1,5 @@
 import { google } from 'googleapis';
+import fs from 'node:fs';
 import { getOrCreateSheet } from './sheets';
 
 const TAB='JOBS';
@@ -10,9 +11,12 @@ const jobRows=new Map<string,number>();
 const jobCache=new Map<string,NDJob>();
 
 function getAuth(){
-  const raw=process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
-  if(!raw) throw new Error('Falta GOOGLE_SERVICE_ACCOUNT_JSON');
-  const c=JSON.parse(raw);
+  const raw=process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
+  if(raw){const c=JSON.parse(raw);return new google.auth.GoogleAuth({credentials:{client_email:c.client_email,private_key:c.private_key},scopes:['https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/spreadsheets']});}
+  const credentialsPath=process.env.GOOGLE_CREDENTIALS_PATH?.trim();
+  if(!credentialsPath) throw new Error('Falta GOOGLE_SERVICE_ACCOUNT_JSON o GOOGLE_CREDENTIALS_PATH');
+  if(!fs.existsSync(credentialsPath)) throw new Error(`No existe GOOGLE_CREDENTIALS_PATH: ${credentialsPath}`);
+  const c=JSON.parse(fs.readFileSync(credentialsPath,'utf8'));
   return new google.auth.GoogleAuth({credentials:{client_email:c.client_email,private_key:c.private_key},scopes:['https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/spreadsheets']});
 }
 const auth=getAuth();
@@ -25,46 +29,26 @@ async function controlSheetId(){
   const have=new Set((meta.data.sheets||[]).map(s=>s.properties?.title));
   if(!have.has(TAB)) await sheets.spreadsheets.batchUpdate({spreadsheetId:id,requestBody:{requests:[{addSheet:{properties:{title:TAB}}}]}});
   await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A1:G1`,valueInputOption:'RAW',requestBody:{values:[HEAD]}});
-  controlIdCache=id;
-  return id;
+  controlIdCache=id; return id;
 }
-
 export interface NDJob { driveId:string; name:string; spreadsheetId?:string; nextPage:number; totalPages:number; status:string; }
-
 async function loadJobs(){
   if(jobsLoaded) return;
   const id=await controlSheetId();
   const r=await sheets.spreadsheets.values.get({spreadsheetId:id,range:`${TAB}!A2:G`});
-  const rows=r.data.values||[];
-  nextRow=rows.length+2;
-  rows.forEach((row,index)=>{
-    const driveId=String(row[0]||'');
-    if(!driveId) return;
-    const job:NDJob={driveId,name:String(row[1]||''),spreadsheetId:row[2]||undefined,nextPage:Number(row[3]||1),totalPages:Number(row[4]||0),status:String(row[5]||'pendiente')};
-    jobRows.set(driveId,index+2);
-    jobCache.set(driveId,job);
-  });
+  const rows=r.data.values||[]; nextRow=rows.length+2;
+  rows.forEach((row,index)=>{const driveId=String(row[0]||'');if(!driveId)return;const job:NDJob={driveId,name:String(row[1]||''),spreadsheetId:row[2]||undefined,nextPage:Number(row[3]||1),totalPages:Number(row[4]||0),status:String(row[5]||'pendiente')};jobRows.set(driveId,index+2);jobCache.set(driveId,job);});
   jobsLoaded=true;
 }
-
 export async function getJob(driveId:string,name:string):Promise<NDJob>{
-  await loadJobs();
-  const job=jobCache.get(driveId);
+  await loadJobs(); const job=jobCache.get(driveId);
   if(!job){const fresh={driveId,name,nextPage:1,totalPages:0,status:'pendiente'};jobCache.set(driveId,fresh);return fresh;}
   return {...job,name:job.name||name};
 }
-
 export async function saveJob(job:NDJob){
-  await loadJobs();
-  const id=await controlSheetId();
-  const row=jobRows.get(job.driveId);
+  await loadJobs(); const id=await controlSheetId(); const row=jobRows.get(job.driveId);
   const values=[[job.driveId,job.name,job.spreadsheetId||'',job.nextPage,job.totalPages,job.status,new Date().toISOString()]];
-  if(row){
-    await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${row}:G${row}`,valueInputOption:'RAW',requestBody:{values}});
-  }else{
-    const targetRow=nextRow++;
-    await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${targetRow}:G${targetRow}`,valueInputOption:'RAW',requestBody:{values}});
-    jobRows.set(job.driveId,targetRow);
-  }
+  if(row) await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${row}:G${row}`,valueInputOption:'RAW',requestBody:{values}});
+  else {const targetRow=nextRow++;await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${targetRow}:G${targetRow}`,valueInputOption:'RAW',requestBody:{values}});jobRows.set(job.driveId,targetRow);}
   jobCache.set(job.driveId,{...job});
 }
