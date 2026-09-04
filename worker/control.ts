@@ -3,6 +3,7 @@ import { getOrCreateSheet } from './sheets';
 
 const TAB='JOBS';
 const HEAD=['drive_id','documento','spreadsheet_id','next_page','total_pages','status','updated_at'];
+let controlIdCache:string|undefined;
 
 function getAuth(){
   const raw=process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -14,6 +15,7 @@ const auth=getAuth();
 const sheets=google.sheets({version:'v4',auth});
 
 async function controlSheetId(){
+  if(controlIdCache) return controlIdCache;
   // La hoja de control también debe ser propiedad de la cuenta humana
   // que ejecuta el bootstrap; la cuenta de servicio solo la edita.
   const id=await getOrCreateSheet('CONTROL','CONTROL');
@@ -26,6 +28,7 @@ async function controlSheetId(){
   if(!r.data.values?.length){
     await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A1:G1`,valueInputOption:'RAW',requestBody:{values:[HEAD]}});
   }
+  controlIdCache=id;
   return id;
 }
 
