@@ -1,15 +1,22 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import pdf from 'pdf-parse';
 import { listPdfs, downloadPdf } from './drive';
-import { extractPdf } from './gemini';
-import { appendFindings, getOrCreateSheet, setDocumentStatus } from './sheets';
+import { appendFindings, appendPages, getOrCreateSheet, setDocumentStatus } from './sheets';
 import { getJob, saveJob } from './control';
 
+const execFileAsync=promisify(execFile);
 const PAGE_CHUNK=Number(process.env.ND_PAGES_PER_CHUNK||10);
 const MAX_PAGES=Number(process.env.ND_MAX_PAGES_PER_RUN||80);
 const MAX_MINUTES=Number(process.env.ND_MAX_MINUTES_PER_RUN||50);
+
+async function deterministicExtract(file:string,fromPage:number,toPage:number){
+ const {stdout}=await execFileAsync('python3',[path.join(process.cwd(),'worker','deterministic_extractor.py'),file,String(fromPage),String(toPage)],{maxBuffer:80*1024*1024,timeout:Math.max(120_000,Number(process.env.ND_PYTHON_TIMEOUT_MS||600_000))});
+ return JSON.parse(stdout);
+}
 
 async function processDoc(doc:any,budget:{pages:number,started:number}){
  const job=await getJob(doc.id,doc.name);
@@ -25,12 +32,13 @@ async function processDoc(doc:any,budget:{pages:number,started:number}){
   let next=job.nextPage;
   while(next<=total && budget.pages<MAX_PAGES && (Date.now()-budget.started)<MAX_MINUTES*60_000){
    const to=Math.min(next+PAGE_CHUNK-1,total);
-   const findings=await extractPdf(tmp,doc.name,doc.id,next,to);
-   await appendFindings(sheetId,doc.id,doc.name,findings);
-   budget.pages+=to-next+1;
-   next=to+1;
+   console.log(`ND | mapa espacial | ${next}-${to}/${total}`);
+   const result=await deterministicExtract(tmp,next,to);
+   await appendPages(sheetId,doc.id,doc.name,result.pages||[]);
+   await appendFindings(sheetId,doc.id,doc.name,result.findings||[]);
+   const processed=to-next+1; budget.pages+=processed; next=to+1;
    await saveJob({driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:next>total?'completado':'procesando'});
-   console.log(`ND | ${doc.name} | ${to}/${total} | ${findings.length} hallazgos`);
+   console.log(`ND | ${doc.name} | ${to}/${total} | paginas=${processed} | hallazgos=${(result.findings||[]).length}`);
   }
   const status=next>total?'completado':'pausado';
   await setDocumentStatus(sheetId,doc.id,doc.name,status,0);
@@ -45,6 +53,6 @@ async function main(){
  if(!selected.length)throw new Error(requested?`No se encontró el documento: ${requested}`:'No hay PDFs disponibles');
  const budget={pages:0,started:Date.now()};
  for(const doc of selected){if(budget.pages>=MAX_PAGES||(Date.now()-budget.started)>=MAX_MINUTES*60_000)break;await processDoc(doc,budget);}
- console.log(`ND FIN | páginas procesadas=${budget.pages} | minutos=${Math.round((Date.now()-budget.started)/6000)/10}`);
+ console.log(`ND FIN | paginas procesadas=${budget.pages} | minutos=${Math.round((Date.now()-budget.started)/6000)/10}`);
 }
-main().catch(e=>{console.error('ND ERROR:',e?.message||e);process.exit(1)});
+main().catch(e=>{console.error('ND ERROR:',e?.stack||e?.message||e);process.exit(1)});
