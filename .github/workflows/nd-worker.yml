@@ -23,26 +23,35 @@ jobs:
       ND_SHEETS_FOLDER_ID: ${{ secrets.ND_SHEETS_FOLDER_ID }}
       ND_SHEETS_BOOTSTRAP_URL: ${{ secrets.ND_SHEETS_BOOTSTRAP_URL }}
       ND_SHEETS_BOOTSTRAP_TOKEN: ${{ secrets.ND_SHEETS_BOOTSTRAP_TOKEN }}
-      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      GEMINI_MODEL: gemini-3.6-flash
       ND_DOCUMENTO_ID: ${{ inputs.documento_id }}
       ND_PAGES_PER_CHUNK: 10
       ND_MAX_PAGES_PER_RUN: 80
       ND_MAX_MINUTES_PER_RUN: 50
+      PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Instalar OCR local
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-spa
+      - name: Instalar dependencias Node
+        run: npm install --no-audit --no-fund
+      - name: Instalar dependencias Python
+        run: python -m pip install --upgrade pip && python -m pip install -r worker/requirements.txt
       - name: Validar configuración
         run: |
           test -n "$GOOGLE_SERVICE_ACCOUNT_JSON"
           test -n "$CARPETA_MADRE_DRIVE_ID"
           test -n "$ND_SHEETS_FOLDER_ID"
-          test -n "$GEMINI_API_KEY"
           test -n "$ND_SHEETS_BOOTSTRAP_URL"
           test -n "$ND_SHEETS_BOOTSTRAP_TOKEN"
-          echo ND_CONFIG_OK
+          python -c "import fitz; print('PYMUPDF_OK')"
+          python -c "import camelot; print('CAMELOT_OK')"
+          tesseract --version | head -1
+          echo ND_CONFIG_OK_NO_AI
       - name: Ejecutar extracción ND
         run: npm run worker:nd
