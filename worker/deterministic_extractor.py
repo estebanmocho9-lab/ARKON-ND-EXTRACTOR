@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json, re, sys, math
+import contextlib, io, json, re, sys, math
 import pymupdf as fitz
 try:
     import camelot
@@ -12,13 +12,15 @@ except Exception:
     pytesseract = None
     Image = None
 
-UNITS=r"(?:mm|cm|m|km|in|ft|yd|µm|um|nm|kg|g|mg|t|lb|N|kN|Pa|kPa|MPa|GPa|psi|bar|°C|°F|K|J|kJ|W|kW|V|A|Hz|s|ms|min|h|d|%|pH|g/cm³|kg/m³|kg/m3|g/cm3|kN/m²|kN/m2)"
-NUMBER=r"[-+]?\d+(?:[.,]\d+)?"
-RANGE_RE=re.compile(rf"{NUMBER}\s*(?:{UNITS})?\s*(?:[-–—]|to|a)\s*{NUMBER}\s*(?:{UNITS})?",re.I)
-VALUE_RE=re.compile(rf"(?<![A-Za-z0-9]){NUMBER}(?:\s*[×x]\s*10\s*[-^]?\s*\d+)?\s*(?:{UNITS})?",re.I)
-STD_RE=re.compile(r"\b(?:ASTM|ISO|IRAM|EN|UNE|DIN|BS|JIS|IEC|NF|CSA|GB|ABNT|AASHTO|ACI|ASME|IEEE|CEN)\s*[- ]?[A-Z]?\s*\d+[A-Z0-9./:-]*\b",re.I)
-FORMULA_RE=re.compile(r"[A-Za-zΑ-Ωα-ωρσμ][A-Za-z0-9_Α-Ωα-ωρσμ]*\s*[=≈≃≤≥<>]\s*[^.;\n]{1,240}")
-SEMANTIC={
+# Las unidades compuestas deben evaluarse antes que sus prefijos simples
+_UNIT_VALUES = ['kN/m²','kN/m2','kg/m³','kg/m3','g/cm³','g/cm3','mm','cm','km','µm','um','nm','kg','mg','lb','kN','MPa','GPa','kPa','Pa','psi','bar','°C','°F','min','ms','kJ','kW','Hz','J','W','V','A','ft','yd','in','m','g','t','N','K','s','h','d','%','pH']
+UNITS = r"(?:" + '|'.join(re.escape(x) for x in sorted(_UNIT_VALUES, key=len, reverse=True)) + r")"
+NUMBER = r"[-+]?\d+(?:[.,]\d+)?"
+RANGE_RE = re.compile(rf"{NUMBER}\s*(?:{UNITS})?\s*(?:[-–—]|to|a)\s*{NUMBER}\s*(?:{UNITS})?", re.I)
+VALUE_RE = re.compile(rf"(?<![A-Za-z0-9]){NUMBER}(?:\s*[×x]\s*10\s*[-^]?\s*\d+)?\s*(?:{UNITS})?", re.I)
+STD_RE = re.compile(r"\b(?:ASTM|ISO|IRAM|EN|UNE|DIN|BS|JIS|IEC|NF|CSA|GB|ABNT|AASHTO|ACI|ASME|IEEE|CEN)\s*[- ]?[A-Z]?\s*\d+[A-Z0-9./:-]*\b", re.I)
+FORMULA_RE = re.compile(r"[A-Za-zΑ-Ωα-ωρσμ][A-Za-z0-9_Α-Ωα-ωρσμ]*\s*[=≈≃≤≥<>]\s*[^.;\n]{1,240}")
+SEMANTIC = {
 'MATERIAL':['material','materials','materiales','sustancia','sustancias','mezcla','mezclas','cement','cemento','concrete','hormigón','hormigon','steel','acero','wood','madera','timber','aluminum','aluminio','polymer','polímero','polimero','ceramic','cerámica','ceramica','glass','vidrio','asphalt','asfalto','mortar','mortero','composite','compuesto'],
 'COMPONENTE':['component','components','componente','componentes','aggregate','agregado','árido','arido','fiber','fibra','resin','resina','binder','aglomerante','filler','relleno','phase','fase','constituent','constituyente','additive','aditivo'],
 'PROPIEDAD':['property','properties','propiedad','propiedades','density','densidad','strength','resistencia','stiffness','rigidez','hardness','dureza','porosity','porosidad','permeability','permeabilidad','viscosity','viscosidad','elasticity','elasticidad','conductivity','conductividad','moisture','humedad','thermal','térmica','termica','compressive','compresión','compression','tensile','tracción','tension','modulus','módulo','modulo'],
@@ -36,7 +38,6 @@ SEMANTIC={
 'LIMITACION':['limitation','limitations','limited','drawback','disadvantage','not suitable','not applicable','cannot be used','limitación','limitaciones','limitado','desventaja','no es adecuado','no resulta adecuado','no puede utilizarse'],
 'DETERIORO':['degradation','deterioration','damage','failure','fracture','cracking','corrosion','wear','fatigue','chemical attack','degradación','deterioro','daño','falla','fractura','fisura','fisuración','corrosión','desgaste','fatiga','ataque químico'],
 'SEGURIDAD':['safety','risk','risks','hazard','hazards','precaution','precautions','toxic','corrosive','seguridad','riesgo','riesgos','peligro','peligros','precaución','precauciones','tóxico','toxica','tóxica','corrosivo']}
-
 KIND_MAP={'MATERIAL':'MATERIAL','COMPONENTE':'COMPONENTE','PROPIEDAD':'PROPIEDAD','METODO':'METODO','INSTRUMENTO':'INSTRUMENTO','APLICACION':'APLICACION','COMPORTAMIENTO':'COMPORTAMIENTO','CONDICION':'CONDICION','DEFINICION':'DEFINICION','RELACION':'RELACION'}
 
 def norm_space(s): return re.sub(r'\s+',' ',s or '').strip()
@@ -86,7 +87,6 @@ def headings(blocks):
         alpha=sum(c.isalpha() for c in t); upper=sum(c.isupper() for c in t if c.isalpha())/max(1,alpha); bold=bool(f['flags']&16) or 'bold' in f['font'].lower()
         if f['size']>=base*1.18 or bold or upper>.72 or re.match(r'^\d+(?:\.\d+)*[.)]?\s+\S+',t): out.append({'text':t,'bbox':b['bbox'],'block':b['id']})
     return out
-
 def entity_near(line,start,end):
     candidates=[line[max(0,start-140):start],line[end:end+140]]
     for c in candidates:
@@ -111,7 +111,7 @@ def semantic_line(out,line,ws,page,section,doctype,ocr=False):
         for term in sorted(terms,key=len,reverse=True):
             for m in re.finditer(re.escape(term),low):
                 start,end=m.start(),m.end(); original=line[max(0,start-90):min(len(line),end+180)]
-                add(out,KIND_MAP.get(kind,'EVIDENCIA') if kind in KIND_MAP else 'EVIDENCIA',term,entity_near(line,start,end),kind.lower(),original,original,page,section,token_bbox(line,ws,start,end),.82,context=line,meta={'source':'semantic_rule','rule':term,'document_type':doctype,'ocr':ocr})
+                add(out,KIND_MAP.get(kind,'EVIDENCIA'),term,entity_near(line,start,end),kind.lower(),original,original,page,section,token_bbox(line,ws,start,end),.82,context=line,meta={'source':'semantic_rule','rule':term,'document_type':doctype,'ocr':ocr})
                 break
             if any(f['page']==page and f['metadata'].get('rule')==term and f['metadata'].get('ocr')==ocr for f in out[-3:]): break
     patterns={'RELACION':r'\b(?:aumenta|incrementa|disminuye|reduce|depende de|influye en|afecta|correlaciona|proporcional|increase|decrease|depends on|influences|affects|correlated with|proportional to)\b[^.;\n]{0,520}','CONDICION':r'\b(?:temperatura|temperature|humedad|humidity|presión|pressure|tiempo de curado|curing time|edad|age|pH|atmosfera|atmosphere|velocidad de ensayo|test speed|loading rate)\b[^.;\n]{0,420}','COMPOSICION':r'\b(?:composición|composition|contenido de|content of|formado por|composed of|contains|contiene|porcentaje|percentage|proporción|proportion|ratio)\b[^.;\n]{0,620}','PROCESO':r'\b(?:fabricación|fabricacion|manufacturing|production|producción|preparación|preparation|mezclado|mixing|molienda|grinding|secado|drying|curado|curing|fraguado|setting|sinterización|sinterization|calcinación|calcination|tratamiento|treatment|procesamiento|processing)\b[^.;\n]{0,620}','COMPARACION':r'\b(?:comparado con|comparada con|en comparación con|similar a|a diferencia de|compared with|compared to|in comparison with|similar to|unlike|whereas)\b[^.;\n]{0,520}','RECOMENDACION':r'\b(?:se recomienda|recomendado|recomendación|debe utilizarse|debe evitarse|no se recomienda|recommended|recommendation|should be used|should be avoided|not recommended)\b[^.;\n]{0,520}','LIMITACION':r'\b(?:limitación|limitaciones|limitado|desventaja|no es adecuado|no resulta adecuado|no puede utilizarse|limitation|limitations|limited|drawback|disadvantage|not suitable|not applicable|cannot be used)\b[^.;\n]{0,520}','DETERIORO':r'\b(?:degradación|deterioro|daño|falla|fractura|fisura|fisuración|corrosión|desgaste|fatiga|ataque químico|degradation|deterioration|damage|failure|fracture|cracking|corrosion|wear|fatigue|chemical attack)\b[^.;\n]{0,520}','SEGURIDAD':r'\b(?:seguridad|riesgo|riesgos|peligro|peligros|precaución|precauciones|tóxico|tóxica|corrosivo|safety|risk|risks|hazard|hazards|precaution|precautions|toxic|corrosive)\b[^.;\n]{0,520}'}
@@ -126,26 +126,38 @@ def extract_page(page,page_no,doctype):
         words=[{'text':w,'bbox':[0,0,0,0],'block':0,'line':0,'word':i} for i,w in enumerate(text.split())]
     findings=[]; section=''
     lines=[norm_space(x) for x in text.splitlines() if norm_space(x)]
-    for b in hs: 
+    heading_texts={h['text'] for h in hs}
+    for b in hs:
         if b['bbox'][1] <= (page.rect.height if page.rect else 99999): section=b['text']
     for line in lines:
         ws=[w for w in words if w['text'] and w['text'] in line.split()]
         if not ws: ws=words[:1] or [{'bbox':[0,0,0,0],'text':''}]
         semantic_line(findings,line,ws,page_no,section,doctype,ocr)
         for m in STD_RE.finditer(line): add(findings,'NORMA','norma',entity_near(line,m.start(),m.end()),'norma',m.group(0),m.group(0),page_no,section,token_bbox(line,ws,m.start(),m.end()),.97,context=line,meta={'source':'standard_regex','document_type':doctype,'ocr':ocr})
-        for m in RANGE_RE.finditer(line): add(findings,'MAGNITUD','range',entity_near(line,m.start(),m.end()),'range',m.group(0),m.group(0),page_no,section,token_bbox(line,ws,m.start(),m.end()),.94,value=numeric_value(m.group(0)),value_text=m.group(0),unit='',context=line,meta={'source':'range_regex','document_type':doctype,'ocr':ocr})
+        for m in RANGE_RE.finditer(line):
+            raw=m.group(0); units=re.findall(UNITS,raw,re.I)
+            add(findings,'MAGNITUD','range',entity_near(line,m.start(),m.end()),'range',raw,raw,page_no,section,token_bbox(line,ws,m.start(),m.end()),.94,value=numeric_value(raw),value_text=raw,unit=units[0] if units and len(units)==1 else '',context=line,meta={'source':'range_regex','document_type':doctype,'ocr':ocr})
+        is_heading=line in heading_texts
         for m in VALUE_RE.finditer(line):
-            raw=m.group(0).strip(); unit=re.search(UNITS,raw,re.I); add(findings,'MAGNITUD','value',entity_near(line,m.start(),m.end()),'value',raw,raw,page_no,section,token_bbox(line,ws,m.start(),m.end()),.93,value=numeric_value(raw),value_text=raw,unit=unit.group(0) if unit else '',context=line,meta={'source':'value_regex','document_type':doctype,'ocr':ocr})
+            raw=m.group(0).strip(); unit=re.search(UNITS,raw,re.I); bare_number=not unit and re.fullmatch(NUMBER,raw)
+            if is_heading and bare_number: continue
+            if bare_number and re.fullmatch(r'[-+]?\d+',raw):
+                continue
+            add(findings,'MAGNITUD','value',entity_near(line,m.start(),m.end()),'value',raw,raw,page_no,section,token_bbox(line,ws,m.start(),m.end()),.93,value=numeric_value(raw),value_text=raw,unit=unit.group(0) if unit else '',context=line,meta={'source':'value_regex','document_type':doctype,'ocr':ocr})
         for m in FORMULA_RE.finditer(line): add(findings,'FORMULA','formula',entity_near(line,m.start(),m.end()),'formula',m.group(0),m.group(0),page_no,section,token_bbox(line,ws,m.start(),m.end()),.95,context=line,meta={'source':'formula_regex','document_type':doctype,'ocr':ocr})
     tables=[]
-    try:
-        if hasattr(page,'find_tables'):
-            for tb in page.find_tables().tables:
-                rows=tb.extract(); tables.append({'bbox':list(tb.bbox),'rows':rows,'source':'pymupdf'})
-    except Exception: pass
+    # Algunas versiones de PyMuPDF imprimen una recomendación a stdout desde find_tables().
+    # La aislamos para garantizar que stdout sea exclusivamente JSON.
+    if hasattr(page,'find_tables'):
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                for tb in page.find_tables().tables:
+                    rows=tb.extract(); tables.append({'bbox':list(tb.bbox),'rows':rows,'source':'pymupdf'})
+        except Exception: pass
     if camelot:
         try:
-            tables.extend({'bbox':[0,0,0,0],'rows':t.df.fillna('').values.tolist(),'source':'camelot_stream'} for t in camelot.read_pdf(str(page.parent.name),pages=str(page_no),flavor='stream'))
+            with contextlib.redirect_stdout(io.StringIO()):
+                tables.extend({'bbox':[0,0,0,0],'rows':t.df.fillna('').values.tolist(),'source':'camelot_stream'} for t in camelot.read_pdf(str(page.parent.name),pages=str(page_no),flavor='stream'))
         except Exception: pass
     return {'page':page_no,'text':text,'words':words,'blocks':blocks,'headings':hs,'tables':tables,'links':page.get_links(),'images':page.get_images(full=True),'ocr':ocr},findings
 
