@@ -14,12 +14,16 @@ with tempfile.TemporaryDirectory() as td:
     page.insert_text((60,180),'rho = m / V')
     doc.save(pdf_path)
     doc.close()
+
     p=subprocess.run(['python3','worker/deterministic_extractor.py',str(pdf_path),'1','1'],capture_output=True,text=True,check=True)
+    assert not p.stderr.strip(), p.stderr
     result=json.loads(p.stdout)
     assert len(result['pages'])==1
     assert result['pages'][0]['text'].strip()
     assert result['pages'][0]['words']
     assert any(x['kind']=='NORMA' and 'ASTM' in x['originalText'] for x in result['findings'])
-    assert any(x['kind']=='MAGNITUD' and x.get('unit') for x in result['findings'])
+    assert any(x['kind']=='MAGNITUD' and x.get('unit')=='g/cm3' for x in result['findings'])
+    assert any(x['kind']=='MAGNITUD' and x.get('unit')=='°C' for x in result['findings'])
+    assert not any(x['kind']=='MAGNITUD' and x['originalText']=='3' and x['page']==1 for x in result['findings'])
     assert any(x['kind']=='FORMULA' for x in result['findings'])
     print('ND_DETERMINISTIC_SELFTEST_OK',len(result['findings']))
