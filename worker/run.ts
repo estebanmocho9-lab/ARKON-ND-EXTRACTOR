@@ -21,28 +21,31 @@ async function processDoc(doc:any,numero:number,budget:{pages:number;started:num
   let sheetId=job.spreadsheetId;
   if(!sheetId){
     const title=`ND-${String(numero).padStart(6,'0')}__${neuron}__${doc.name.replace(/\.pdf$/i,'')}`;
-    sheetId=await createPdfSpreadsheet(title);
-    await saveJob({...job,numero,spreadsheetId:sheetId,status:'procesando'});
+    const created=await createPdfSpreadsheet(title);
+    await saveJob({...job,numero,spreadsheetId:created,status:'procesando'});
+    sheetId=created;
   }else await ensureNeuralSheets(sheetId);
-  console.log(`ND | ${neuron} | Nº ${String(numero).padStart(6,'0')} | ${doc.name} | Spreadsheet=${sheetId} | desde página ${job.nextPage}`);
+  if(!sheetId)throw new Error(`No se pudo resolver Spreadsheet para ${doc.name}`);
+  const pdfSheetId=sheetId;
+  console.log(`ND | ${neuron} | Nº ${String(numero).padStart(6,'0')} | ${doc.name} | Spreadsheet=${pdfSheetId} | desde página ${job.nextPage}`);
   const buffer=await downloadPdf(doc.id);
   try{
     const meta=await pdf(buffer);const total=meta.numpages||0;const memory=createMemory(doc.id,doc.name,neuron);
-    await setDocumentStatus(sheetId,doc.id,doc.name,'procesando',0);
+    await setDocumentStatus(pdfSheetId,doc.id,doc.name,'procesando',0);
     let next=job.nextPage;let findingsTotal=0;
     while(next<=total&&budget.pages<MAX_PAGES&&(Date.now()-budget.started)<MAX_MINUTES*60_000){
       console.log(`ND | ${neuron} | Nº ${String(numero).padStart(6,'0')} | página ${next}/${total} | extracción -> micro-neuronas -> Sheets -> checkpoint`);
       const result=await deterministicExtract(buffer,next,next);const pages=result.pages||[];const raw=result.findings||[];const neural=processNeuralChunk(raw,memory,knowledge,next,neuron);
-      await appendPages(sheetId,doc.id,doc.name,pages);
-      await appendFindings(sheetId,doc.id,doc.name,neural);
-      await appendNeuralChunk(sheetId,memory,neural);
+      await appendPages(pdfSheetId,doc.id,doc.name,pages);
+      await appendFindings(pdfSheetId,doc.id,doc.name,neural);
+      await appendNeuralChunk(pdfSheetId,memory,neural);
       findingsTotal+=neural.length;budget.pages++;next++;
-      await saveJob({numero,driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:next>total?'completado':'procesando'});
-      await setDocumentStatus(sheetId,doc.id,doc.name,next>total?'completado':'procesando',findingsTotal);
+      await saveJob({numero,driveId:doc.id,name:doc.name,spreadsheetId:pdfSheetId,nextPage:next,totalPages:total,status:next>total?'completado':'procesando'});
+      await setDocumentStatus(pdfSheetId,doc.id,doc.name,next>total?'completado':'procesando',findingsTotal);
       console.log(`ND | ${neuron} | Nº ${String(numero).padStart(6,'0')} | ${doc.name} | página ${next-1}/${total} CONFIRMADA | hallazgos=${neural.length} | total=${findingsTotal}`);
     }
-    if(next>total){await setDocumentStatus(sheetId,doc.id,doc.name,'completado',findingsTotal);await saveJob({numero,driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:'completado'});console.log(`ND | ${neuron} | Nº ${String(numero).padStart(6,'0')} | ${doc.name} | PDF COMPLETADO | paginas=${total} | hallazgos=${findingsTotal} | Spreadsheet=${sheetId}`);}
-    else{await setDocumentStatus(sheetId,doc.id,doc.name,'pausado',findingsTotal);await saveJob({numero,driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:'procesando'});}
+    if(next>total){await setDocumentStatus(pdfSheetId,doc.id,doc.name,'completado',findingsTotal);await saveJob({numero,driveId:doc.id,name:doc.name,spreadsheetId:pdfSheetId,nextPage:next,totalPages:total,status:'completado'});console.log(`ND | ${neuron} | Nº ${String(numero).padStart(6,'0')} | ${doc.name} | PDF COMPLETADO | paginas=${total} | hallazgos=${findingsTotal} | Spreadsheet=${pdfSheetId}`);}
+    else{await setDocumentStatus(pdfSheetId,doc.id,doc.name,'pausado',findingsTotal);await saveJob({numero,driveId:doc.id,name:doc.name,spreadsheetId:pdfSheetId,nextPage:next,totalPages:total,status:'procesando'});}
     return true;
   }finally{buffer.fill(0);}
 }
