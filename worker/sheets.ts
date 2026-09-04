@@ -19,45 +19,27 @@ async function ensure(id:string){
  await sheets.spreadsheets.values.batchUpdate({spreadsheetId:id,requestBody:{valueInputOption:'RAW',data}});
  ensured.add(id);
 }
-
 async function bootstrapAsUser(name:string){
- const url=process.env.ND_SHEETS_BOOTSTRAP_URL?.trim();
- const token=process.env.ND_SHEETS_BOOTSTRAP_TOKEN?.trim();
+ const url=process.env.ND_SHEETS_BOOTSTRAP_URL?.trim(); const token=process.env.ND_SHEETS_BOOTSTRAP_TOKEN?.trim();
  if(!url||!token) throw new Error('Falta ND_SHEETS_BOOTSTRAP_URL o ND_SHEETS_BOOTSTRAP_TOKEN');
  const c=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON!);
  const response=await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({token,name,service_account:c.client_email})});
- const text=await response.text();
- if(!response.ok) throw new Error(`Sheets bootstrap HTTP ${response.status}: ${text.slice(0,500)}`);
+ const text=await response.text(); if(!response.ok) throw new Error(`Sheets bootstrap HTTP ${response.status}: ${text.slice(0,500)}`);
  let data:any; try{data=JSON.parse(text)}catch{throw new Error(`Sheets bootstrap devolvió una respuesta no JSON: ${text.slice(0,300)}`)}
  if(!data.ok||!data.spreadsheetId) throw new Error(`Sheets bootstrap falló: ${data.error||'sin spreadsheetId'}`);
  console.log(`ND | Sheets bootstrap OK | ${data.name||name}`); return data.spreadsheetId as string;
 }
-
 export async function getOrCreateSheet(driveId:string,name:string){
  const parent=process.env.ND_SHEETS_FOLDER_ID;if(!parent)throw new Error('Falta ND_SHEETS_FOLDER_ID');
  const safe=`ARKON_ND_${name.replace(/[^\w.-]+/g,'_').slice(0,70)}`;
  const q=`'${parent}' in parents and name='${safe.replace(/'/g,"\\'")}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false`;
- const found=await drive.files.list({q,fields:'files(id,name)',pageSize:1});
- let id=found.data.files?.[0]?.id;
- if(!id) id=await bootstrapAsUser(name);
- await ensure(id);return id;
+ const found=await drive.files.list({q,fields:'files(id,name)',pageSize:1}); let id=found.data.files?.[0]?.id; if(!id) id=await bootstrapAsUser(name); await ensure(id); return id;
 }
-
-function normalizeKind(kind:string):string{
- const k=String(kind||'').trim().toUpperCase(); if(KIND_TO_TAB[k]) return k;
- if(k==='PROPERTY') return 'PROPIEDAD'; if(k==='MAGNITUDE') return 'MAGNITUD'; if(k==='DEFINITION') return 'DEFINICION'; if(k==='COMPONENT') return 'COMPONENTE'; if(k==='RELATION') return 'RELACION'; if(k==='CONDITION'||k==='REQUIREMENT') return 'CONDICION'; if(k==='METHOD') return 'METODO'; if(k==='INSTRUMENT') return 'INSTRUMENTO'; if(k==='APPLICATION') return 'APLICACION'; if(k==='BEHAVIOR') return 'COMPORTAMIENTO'; if(k==='STANDARD'||k==='NORM') return 'NORMA'; if(k==='FORMULA') return 'FORMULA'; if(k==='EVIDENCE') return 'EVIDENCIA'; if(k==='ATTRIBUTE') return 'ATRIBUTO'; if(k==='ENTITY') return 'ENTIDAD'; return '';
-}
-
+function normalizeKind(kind:string):string{const k=String(kind||'').trim().toUpperCase();if(KIND_TO_TAB[k])return k;if(k==='PROPERTY')return'PROPIEDAD';if(k==='MAGNITUDE')return'MAGNITUD';if(k==='DEFINITION')return'DEFINICION';if(k==='COMPONENT')return'COMPONENTE';if(k==='RELATION')return'RELACION';if(k==='CONDITION'||k==='REQUIREMENT')return'CONDICION';if(k==='METHOD')return'METODO';if(k==='INSTRUMENT')return'INSTRUMENTO';if(k==='APPLICATION')return'APLICACION';if(k==='BEHAVIOR')return'COMPORTAMIENTO';if(k==='STANDARD'||k==='NORM')return'NORMA';if(k==='FORMULA')return'FORMULA';if(k==='EVIDENCE')return'EVIDENCIA';if(k==='ATTRIBUTE')return'ATRIBUTO';if(k==='ENTITY')return'ENTIDAD';return'';}
 export async function appendPages(id:string,driveId:string,name:string,pages:any[]){
  if(!pages.length)return;
- const rows=pages.map(p=>[driveId,name,p.page,p.text||'',JSON.stringify(p.bbox||[]),JSON.stringify(p.words||[]),JSON.stringify(p.blocks||[]),JSON.stringify(p.headings||[]),JSON.stringify(p.tables||[]),JSON.stringify(p.links||[]),JSON.stringify(p.images||[]),p.ocr_used?'SI':'NO']);
- for(let i=0;i<rows.length;i+=20) await sheets.spreadsheets.values.append({spreadsheetId:id,range:'PAGINAS!A:L',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rows.slice(i,i+20)}});
+ const rs=pages.map(p=>[driveId,name,p.page,p.text||'',JSON.stringify(p.bbox||[]),JSON.stringify(p.words||[]),JSON.stringify(p.blocks||[]),JSON.stringify(p.headings||[]),JSON.stringify(p.tables||[]),JSON.stringify(p.links||[]),JSON.stringify(p.images||[]),p.ocr_used?'SI':'NO']);
+ for(let i=0;i<rs.length;i+=20) await sheets.spreadsheets.values.append({spreadsheetId:id,range:'PAGINAS',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rs.slice(i,i+20)}});
 }
-
-export async function appendFindings(id:string,driveId:string,name:string,findings:NDFinding[]){
- if(!findings.length)return;
- const normalized=findings.map(h=>({...h,kind:normalizeKind(h.kind)}));
- const all=rows(name,driveId,normalized); for(let i=0;i<all.length;i+=500) await sheets.spreadsheets.values.append({spreadsheetId:id,range:'HALLAZGOS_RAW!A:S',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:all.slice(i,i+500)}});
- for(const [kind,tab] of Object.entries(KIND_TO_TAB)){const rs=normalized.filter(x=>x.kind===kind);const rr=rows(name,driveId,rs);for(let i=0;i<rr.length;i+=500)await sheets.spreadsheets.values.append({spreadsheetId:id,range:`${tab}!A:S`,valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rr.slice(i,i+500)}});}
-}
+export async function appendFindings(id:string,driveId:string,name:string,findings:NDFinding[]){if(!findings.length)return;const normalized=findings.map(h=>({...h,kind:normalizeKind(h.kind)}));const all=rows(name,driveId,normalized);for(let i=0;i<all.length;i+=500)await sheets.spreadsheets.values.append({spreadsheetId:id,range:'HALLAZGOS_RAW',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:all.slice(i,i+500)}});for(const[kind,tab]of Object.entries(KIND_TO_TAB)){const rr=rows(name,driveId,normalized.filter(x=>x.kind===kind));for(let i=0;i<rr.length;i+=500)await sheets.spreadsheets.values.append({spreadsheetId:id,range:tab,valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rr.slice(i,i+500)}});}}
 export async function setDocumentStatus(id:string,driveId:string,name:string,status:string,total:number){await sheets.spreadsheets.values.update({spreadsheetId:id,range:'DOCUMENTO!A2:D2',valueInputOption:'RAW',requestBody:{values:[[driveId,name,status,total]]}});}
