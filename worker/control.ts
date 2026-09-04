@@ -4,6 +4,10 @@ import { getOrCreateSheet } from './sheets';
 const TAB='JOBS';
 const HEAD=['drive_id','documento','spreadsheet_id','next_page','total_pages','status','updated_at'];
 let controlIdCache:string|undefined;
+let jobsLoaded=false;
+let nextRow=2;
+const jobRows=new Map<string,number>();
+const jobCache=new Map<string,NDJob>();
 
 function getAuth(){
   const raw=process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
@@ -16,39 +20,51 @@ const sheets=google.sheets({version:'v4',auth});
 
 async function controlSheetId(){
   if(controlIdCache) return controlIdCache;
-  // La hoja de control también debe ser propiedad de la cuenta humana
-  // que ejecuta el bootstrap; la cuenta de servicio solo la edita.
   const id=await getOrCreateSheet('CONTROL','CONTROL');
   const meta=await sheets.spreadsheets.get({spreadsheetId:id,fields:'sheets.properties'});
   const have=new Set((meta.data.sheets||[]).map(s=>s.properties?.title));
-  if(!have.has(TAB)){
-    await sheets.spreadsheets.batchUpdate({spreadsheetId:id,requestBody:{requests:[{addSheet:{properties:{title:TAB}}}]}});
-  }
-  const r=await sheets.spreadsheets.values.get({spreadsheetId:id,range:`${TAB}!A1:G1`});
-  if(!r.data.values?.length){
-    await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A1:G1`,valueInputOption:'RAW',requestBody:{values:[HEAD]}});
-  }
+  if(!have.has(TAB)) await sheets.spreadsheets.batchUpdate({spreadsheetId:id,requestBody:{requests:[{addSheet:{properties:{title:TAB}}}]}});
+  await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A1:G1`,valueInputOption:'RAW',requestBody:{values:[HEAD]}});
   controlIdCache=id;
   return id;
 }
 
 export interface NDJob { driveId:string; name:string; spreadsheetId?:string; nextPage:number; totalPages:number; status:string; }
 
-export async function getJob(driveId:string,name:string):Promise<NDJob>{
+async function loadJobs(){
+  if(jobsLoaded) return;
   const id=await controlSheetId();
   const r=await sheets.spreadsheets.values.get({spreadsheetId:id,range:`${TAB}!A2:G`});
   const rows=r.data.values||[];
-  const row=rows.find(x=>x[0]===driveId);
-  if(!row) return {driveId,name,nextPage:1,totalPages:0,status:'pendiente'};
-  return {driveId,name:row[1]||name,spreadsheetId:row[2]||undefined,nextPage:Number(row[3]||1),totalPages:Number(row[4]||0),status:row[5]||'pendiente'};
+  nextRow=rows.length+2;
+  rows.forEach((row,index)=>{
+    const driveId=String(row[0]||'');
+    if(!driveId) return;
+    const job:NDJob={driveId,name:String(row[1]||''),spreadsheetId:row[2]||undefined,nextPage:Number(row[3]||1),totalPages:Number(row[4]||0),status:String(row[5]||'pendiente')};
+    jobRows.set(driveId,index+2);
+    jobCache.set(driveId,job);
+  });
+  jobsLoaded=true;
+}
+
+export async function getJob(driveId:string,name:string):Promise<NDJob>{
+  await loadJobs();
+  const job=jobCache.get(driveId);
+  if(!job){const fresh={driveId,name,nextPage:1,totalPages:0,status:'pendiente'};jobCache.set(driveId,fresh);return fresh;}
+  return {...job,name:job.name||name};
 }
 
 export async function saveJob(job:NDJob){
+  await loadJobs();
   const id=await controlSheetId();
-  const r=await sheets.spreadsheets.values.get({spreadsheetId:id,range:`${TAB}!A2:G`});
-  const rows=r.data.values||[];
-  const index=rows.findIndex(x=>x[0]===job.driveId);
+  const row=jobRows.get(job.driveId);
   const values=[[job.driveId,job.name,job.spreadsheetId||'',job.nextPage,job.totalPages,job.status,new Date().toISOString()]];
-  if(index<0){ await sheets.spreadsheets.values.append({spreadsheetId:id,range:`${TAB}!A:G`,valueInputOption:'RAW',requestBody:{values}}); }
-  else { await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${index+2}:G${index+2}`,valueInputOption:'RAW',requestBody:{values}}); }
+  if(row){
+    await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${row}:G${row}`,valueInputOption:'RAW',requestBody:{values}});
+  }else{
+    const targetRow=nextRow++;
+    await sheets.spreadsheets.values.update({spreadsheetId:id,range:`${TAB}!A${targetRow}:G${targetRow}`,valueInputOption:'RAW',requestBody:{values}});
+    jobRows.set(job.driveId,targetRow);
+  }
+  jobCache.set(job.driveId,{...job});
 }
