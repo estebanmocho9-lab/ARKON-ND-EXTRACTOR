@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import json, re, sys, math
-import fitz
+import pymupdf as fitz
 try:
     import camelot
 except Exception:
@@ -86,6 +86,7 @@ def headings(blocks):
         alpha=sum(c.isalpha() for c in t); upper=sum(c.isupper() for c in t if c.isalpha())/max(1,alpha); bold=bool(f['flags']&16) or 'bold' in f['font'].lower()
         if f['size']>=base*1.18 or bold or upper>.72 or re.match(r'^\d+(?:\.\d+)*[.)]?\s+\S+',t): out.append({'text':t,'bbox':b['bbox'],'block':b['id']})
     return out
+
 def entity_near(line,start,end):
     candidates=[line[max(0,start-140):start],line[end:end+140]]
     for c in candidates:
@@ -94,7 +95,6 @@ def entity_near(line,start,end):
         if 2<=len(c)<=90 and not re.fullmatch(r'[\d\W_]+',c): return c
     return ''
 def token_bbox(line,ws,start,end):
-    # Approximate character offsets against the reconstructed line while retaining real word geometry.
     cursor=0; chosen=[]
     for w in ws:
         s=cursor; e=s+len(w['text']); cursor=e+1
@@ -114,75 +114,51 @@ def semantic_line(out,line,ws,page,section,doctype,ocr=False):
                 add(out,KIND_MAP.get(kind,'EVIDENCIA') if kind in KIND_MAP else 'EVIDENCIA',term,entity_near(line,start,end),kind.lower(),original,original,page,section,token_bbox(line,ws,start,end),.82,context=line,meta={'source':'semantic_rule','rule':term,'document_type':doctype,'ocr':ocr})
                 break
             if any(f['page']==page and f['metadata'].get('rule')==term and f['metadata'].get('ocr')==ocr for f in out[-3:]): break
-    # Explicit relationship/condition/process blocks retain more context than a keyword hit.
-    patterns={'RELACION':r'\b(?:aumenta|incrementa|disminuye|reduce|depende de|influye en|afecta|correlaciona|proporcional|increase|decrease|depends on|influences|affects|correlated with|proportional to)\b[^.;\n]{0,520}','CONDICION':r'\b(?:temperatura|temperature|humedad|humidity|presión|pressure|tiempo de curado|curing time|edad|age|pH|atmosfera|atmosphere|velocidad de ensayo|test speed|loading rate)\b[^.;\n]{0,420}','COMPOSICION':r'\b(?:composición|composition|contenido de|content of|formado por|composed of|contains|contiene|porcentaje|percentage|proporción|proportion|ratio)\b[^.;\n]{0,620}','PROCESO':r'\b(?:fabricación|fabricacion|manufacturing|production|producción|preparación|preparation|mezclado|mixing|molienda|grinding|secado|drying|curado|curing|sinterización|sinterization|calcinación|calcination|tratamiento|treatment|procesamiento|processing)\b[^.;\n]{0,620}'}
-    for k,p in patterns.items():
-        for m in re.finditer(p,line,flags=re.I): add(out,'EVIDENCIA',k.lower(),entity_near(line,m.start(),m.end()),k.lower(),m.group(0),m.group(0),page,section,token_bbox(line,ws,m.start(),m.end()),.78,context=line,meta={'source':'explicit_context_rule','category':k,'ocr':ocr})
-    for m in STD_RE.finditer(line): add(out,'NORMA','norma',m.group(0),'estandar',m.group(0),m.group(0),page,section,token_bbox(line,ws,m.start(),m.end()),.99,context=line,meta={'source':'regex_standard'})
-    occupied=[]
-    for m in RANGE_RE.finditer(line):
-        raw=m.group(0).strip(); occupied.append((m.start(),m.end())); add(out,'MAGNITUD','rango',entity_near(line,m.start(),m.end()),'rango',raw,raw,page,section,token_bbox(line,ws,m.start(),m.end()),.98,value=numeric_value(raw),value_text=raw,context=line,meta={'source':'regex_range'})
-    for m in VALUE_RE.finditer(line):
-        if any(a<=m.start()<b or a<m.end()<=b for a,b in occupied): continue
-        raw=m.group(0).strip(); val=numeric_value(raw); um=re.search(r'('+UNITS+r')\s*$',raw,re.I); unit=um.group(1) if um else ''
-        add(out,'MAGNITUD' if unit else 'ATRIBUTO','valor',entity_near(line,m.start(),m.end()),'valor_documental',raw,raw,page,section,token_bbox(line,ws,m.start(),m.end()),.97,value=val,value_text=raw,unit=unit,context=line,meta={'source':'regex_numeric'})
-    for m in FORMULA_RE.finditer(line):
-        raw=m.group(0).strip()
-        if any(ch in raw for ch in '=≈≃≤≥<>'): add(out,'FORMULA','formula',entity_near(line,m.start(),m.end()),'expresion',raw,raw,page,section,token_bbox(line,ws,m.start(),m.end()),.93,symbol=re.split(r'[=≈≃≤≥<>]',raw,1)[0].strip()[:60],context=line,meta={'source':'regex_formula'})
-def extract(pdf_path,start_page,end_page):
-    doc=fitz.open(pdf_path); findings=[]; pages=[]; last_section=''
-    for pno in range(start_page-1,min(end_page,len(doc))):
-        page=doc[pno]; data,words=extract_words(page); blocks=make_blocks(data); heads=headings(blocks); page_text=page.get_text('text'); doctype=doc_type(pdf_path,page_text)
-        # Section is the last heading above the current line, not merely the last heading on the page.
-        images=[{'xref':im[0]} for im in page.get_images(full=True)]; links=[]
-        try: links=[{k:v for k,v in l.items() if k in ('uri','from','page')} for l in page.get_links()]
-        except Exception: pass
-        table_payload=[]
+    patterns={'RELACION':r'\b(?:aumenta|incrementa|disminuye|reduce|depende de|influye en|afecta|correlaciona|proporcional|increase|decrease|depends on|influences|affects|correlated with|proportional to)\b[^.;\n]{0,520}','CONDICION':r'\b(?:temperatura|temperature|humedad|humidity|presión|pressure|tiempo de curado|curing time|edad|age|pH|atmosfera|atmosphere|velocidad de ensayo|test speed|loading rate)\b[^.;\n]{0,420}','COMPOSICION':r'\b(?:composición|composition|contenido de|content of|formado por|composed of|contains|contiene|porcentaje|percentage|proporción|proportion|ratio)\b[^.;\n]{0,620}','PROCESO':r'\b(?:fabricación|fabricacion|manufacturing|production|producción|preparación|preparation|mezclado|mixing|molienda|grinding|secado|drying|curado|curing|fraguado|setting|sinterización|sinterization|calcinación|calcination|tratamiento|treatment|procesamiento|processing)\b[^.;\n]{0,620}','COMPARACION':r'\b(?:comparado con|comparada con|en comparación con|similar a|a diferencia de|compared with|compared to|in comparison with|similar to|unlike|whereas)\b[^.;\n]{0,520}','RECOMENDACION':r'\b(?:se recomienda|recomendado|recomendación|debe utilizarse|debe evitarse|no se recomienda|recommended|recommendation|should be used|should be avoided|not recommended)\b[^.;\n]{0,520}','LIMITACION':r'\b(?:limitación|limitaciones|limitado|desventaja|no es adecuado|no resulta adecuado|no puede utilizarse|limitation|limitations|limited|drawback|disadvantage|not suitable|not applicable|cannot be used)\b[^.;\n]{0,520}','DETERIORO':r'\b(?:degradación|deterioro|daño|falla|fractura|fisura|fisuración|corrosión|desgaste|fatiga|ataque químico|degradation|deterioration|damage|failure|fracture|cracking|corrosion|wear|fatigue|chemical attack)\b[^.;\n]{0,520}','SEGURIDAD':r'\b(?:seguridad|riesgo|riesgos|peligro|peligros|precaución|precauciones|tóxico|tóxica|corrosivo|safety|risk|risks|hazard|hazards|precaution|precautions|toxic|corrosive)\b[^.;\n]{0,520}'}
+    for kind,pat in patterns.items():
+        for m in re.finditer(pat,line,flags=re.I):
+            original=norm_space(m.group(0)); add(out,KIND_MAP.get(kind,'EVIDENCIA'),kind.lower(),entity_near(line,m.start(),m.end()),kind.lower(),original,original,page,section,lb,.86,context=line,meta={'source':'documentary_rule','rule':kind,'document_type':doctype,'ocr':ocr})
+
+def extract_page(page,page_no,doctype):
+    data,words=extract_words(page); blocks=make_blocks(data); hs=headings(blocks); text=page.get_text('text') or ''; ocr=False
+    if not text.strip() and pytesseract and Image:
+        pix=page.get_pixmap(matrix=fitz.Matrix(2,2),alpha=False); img=Image.frombytes('RGB',[pix.width,pix.height],pix.samples); text=pytesseract.image_to_string(img,lang='spa+eng'); ocr=True
+        words=[{'text':w,'bbox':[0,0,0,0],'block':0,'line':0,'word':i} for i,w in enumerate(text.split())]
+    findings=[]; section=''
+    lines=[norm_space(x) for x in text.splitlines() if norm_space(x)]
+    for b in hs: 
+        if b['bbox'][1] <= (page.rect.height if page.rect else 99999): section=b['text']
+    for line in lines:
+        ws=[w for w in words if w['text'] and w['text'] in line.split()]
+        if not ws: ws=words[:1] or [{'bbox':[0,0,0,0],'text':''}]
+        semantic_line(findings,line,ws,page_no,section,doctype,ocr)
+        for m in STD_RE.finditer(line): add(findings,'NORMA','norma',entity_near(line,m.start(),m.end()),'norma',m.group(0),m.group(0),page_no,section,token_bbox(line,ws,m.start(),m.end()),.97,context=line,meta={'source':'standard_regex','document_type':doctype,'ocr':ocr})
+        for m in RANGE_RE.finditer(line): add(findings,'MAGNITUD','range',entity_near(line,m.start(),m.end()),'range',m.group(0),m.group(0),page_no,section,token_bbox(line,ws,m.start(),m.end()),.94,value=numeric_value(m.group(0)),value_text=m.group(0),unit='',context=line,meta={'source':'range_regex','document_type':doctype,'ocr':ocr})
+        for m in VALUE_RE.finditer(line):
+            raw=m.group(0).strip(); unit=re.search(UNITS,raw,re.I); add(findings,'MAGNITUD','value',entity_near(line,m.start(),m.end()),'value',raw,raw,page_no,section,token_bbox(line,ws,m.start(),m.end()),.93,value=numeric_value(raw),value_text=raw,unit=unit.group(0) if unit else '',context=line,meta={'source':'value_regex','document_type':doctype,'ocr':ocr})
+        for m in FORMULA_RE.finditer(line): add(findings,'FORMULA','formula',entity_near(line,m.start(),m.end()),'formula',m.group(0),m.group(0),page_no,section,token_bbox(line,ws,m.start(),m.end()),.95,context=line,meta={'source':'formula_regex','document_type':doctype,'ocr':ocr})
+    tables=[]
+    try:
+        if hasattr(page,'find_tables'):
+            for tb in page.find_tables().tables:
+                rows=tb.extract(); tables.append({'bbox':list(tb.bbox),'rows':rows,'source':'pymupdf'})
+    except Exception: pass
+    if camelot:
         try:
-            finder=page.find_tables()
-            for ti,t in enumerate(finder.tables):
-                rows=[[str(c or '') for c in row] for row in t.extract()]; table_payload.append({'index':ti,'bbox':list(t.bbox),'rows':rows})
-                for ri,row in enumerate(rows):
-                    for ci,cell in enumerate(row):
-                        if cell.strip(): add(findings,'EVIDENCIA','tabla_celda',cell,f'fila_{ri+1}_columna_{ci+1}',cell,cell,pno+1,last_section,list(t.bbox),.98,meta={'source':'pymupdf.find_tables','table_index':ti,'row':ri,'column':ci})
+            tables.extend({'bbox':[0,0,0,0],'rows':t.df.fillna('').values.tolist(),'source':'camelot_stream'} for t in camelot.read_pdf(str(page.parent.name),pages=str(page_no),flavor='stream'))
         except Exception: pass
-        if camelot and page_text.strip():
-            try:
-                for ti,t in enumerate(camelot.read_pdf(pdf_path,pages=str(pno+1),flavor='stream')):
-                    for ri,row in enumerate(t.df.values.tolist()):
-                        for ci,cell in enumerate(row):
-                            cell=str(cell or '').strip()
-                            if cell: add(findings,'EVIDENCIA','tabla_celda',cell,f'fila_{ri+1}_columna_{ci+1}',cell,cell,pno+1,last_section,[0,0,0,0],.94,meta={'source':'camelot.stream','table_index':ti,'row':ri,'column':ci})
-            except Exception: pass
-        for h in heads: add(findings,'ENTIDAD','encabezado',h['text'],'seccion',h['text'],h['text'],pno+1,h['text'],h['bbox'],.93,meta={'source':'layout_heading'})
-        by_line={}
-        for w in words: by_line.setdefault((w['block'],w['line']),[]).append(w)
-        lines=[]
-        for ws in by_line.values():
-            ws.sort(key=lambda x:x['bbox'][0]); txt=' '.join(w['text'] for w in ws).strip()
-            if txt: lines.append((min(w['bbox'][1] for w in ws),txt,ws))
-        for _,line,ws in sorted(lines,key=lambda x:x[0]):
-            for h in heads:
-                if h['bbox'][1]<=min(w['bbox'][1] for w in ws)+1: last_section=h['text']
-            semantic_line(findings,line,ws,pno+1,last_section,doctype)
-        ocr_used=False
-        if not page_text.strip() and pytesseract and Image:
-            try:
-                pix=page.get_pixmap(matrix=fitz.Matrix(2,2),alpha=False); img=Image.frombytes('RGB',[pix.width,pix.height],pix.samples); ocr=pytesseract.image_to_string(img)
-                if ocr.strip():
-                    page_text=ocr; ocr_used=True; ocr_ws=[{'text':w,'bbox':[0,0,0,0],'block':0,'line':i,'word':0} for i,w in enumerate(re.findall(r'\S+',ocr))]
-                    for ln in ocr.splitlines():
-                        if ln.strip(): semantic_line(findings,ln,ocr_ws,pno+1,last_section,doctype,True)
-                    add(findings,'EVIDENCIA','ocr_text','pagina','texto_ocr',ocr[:20000],ocr,pno+1,last_section,[0,0,page.rect.width,page.rect.height],.80,meta={'source':'tesseract_ocr'})
-            except Exception: pass
-        pages.append({'page':pno+1,'text':page_text,'bbox':[0,0,page.rect.width,page.rect.height],'words':words,'blocks':blocks,'headings':heads,'tables':table_payload,'links':links,'images':images,'ocr_used':ocr_used})
-    doc.close()
-    seen=set(); clean=[]
-    for f in findings:
-        key=(f['page'],f['kind'],f['field'],f['entity'],f['originalText'],f['metadata'].get('source'),f['metadata'].get('rule'))
-        if key not in seen: seen.add(key); clean.append(f)
-    return {'pages':pages,'findings':clean}
+    return {'page':page_no,'text':text,'words':words,'blocks':blocks,'headings':hs,'tables':tables,'links':page.get_links(),'images':page.get_images(full=True),'ocr':ocr},findings
+
 def main():
-    if len(sys.argv)<4: print('usage: deterministic_extractor.py PDF START END',file=sys.stderr); sys.exit(2)
-    print(json.dumps(extract(sys.argv[1],int(sys.argv[2]),int(sys.argv[3])),ensure_ascii=False,separators=(',',':')))
+    if len(sys.argv)<2: raise SystemExit('usage: deterministic_extractor.py PDF [start_page] [end_page]')
+    pdf_path=sys.argv[1]; start=int(sys.argv[2]) if len(sys.argv)>2 else 1; end=int(sys.argv[3]) if len(sys.argv)>3 else start
+    doc=fitz.open(pdf_path); full='\n'.join((p.get_text('text') or '') for p in doc); doctype=doc_type(pdf_path,full); pages=[]; findings=[]
+    for n in range(start,min(end,len(doc))+1):
+        p,fs=extract_page(doc[n-1],n,doctype); pages.append(p); findings.extend(fs)
+    seen=set(); uniq=[]
+    for f in findings:
+        key=(f['kind'],f['originalText'],f['page'],f['evidence']['bbox'] and tuple(f['evidence']['bbox']))
+        if key in seen: continue
+        seen.add(key); uniq.append(f)
+    print(json.dumps({'pages':pages,'findings':uniq},ensure_ascii=False))
 if __name__=='__main__': main()
