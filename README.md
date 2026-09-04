@@ -4,49 +4,51 @@ Extractor documental independiente de ARKON.
 
 ## Flujo
 
-Google Drive (solo lectura) → GitHub Actions worker → Gemini → extracción ND exhaustiva → Google Sheets.
+Google Drive (solo lectura) → GitHub Actions worker → **motor espacial determinístico local** → Google Sheets.
 
-La web en Vercel es el panel: permite lanzar un documento. El procesamiento pesado ocurre en GitHub Actions, por lo que cerrar el navegador no interrumpe el trabajo.
+No depende de Gemini, OpenAI ni ninguna API de IA para extraer. La web en Vercel es opcional y funciona como panel; el procesamiento pesado ocurre en GitHub Actions.
 
-## Automatización actual
+## Motor ND
 
-- El workflow `ND Worker` corre automáticamente una vez por día y procesa **un PDF por corrida**.
-- También puede lanzarse manualmente desde GitHub Actions o desde el panel web.
-- Un PDF grande se procesa como un único documento.
-- Varios PDFs pequeños pueden procesarse en corridas sucesivas sin paralelizar el mismo documento.
-- El PDF temporal se elimina al terminar.
-- Los PDFs originales nunca se modifican.
-- La extracción no escribe en Supabase.
+La extracción combina varias capas sin IA:
+
+1. **PyMuPDF**: texto completo, palabras con coordenadas, bloques, líneas, spans, tipografía, enlaces, imágenes y estructura.
+2. **Mapa espacial**: relaciones por proximidad, misma línea/bloque, posición arriba/abajo/izquierda/derecha y contexto.
+3. **Tablas PyMuPDF**: detección y extracción de tablas/celdas.
+4. **Camelot**: segunda extracción independiente de tablas para aumentar cobertura.
+5. **Regex y reglas**: valores, rangos, unidades, porcentajes, normas, fórmulas, símbolos y patrones documentales.
+6. **Tipografía/layout**: encabezados y secciones.
+7. **OCR local**: Tesseract solo para páginas que no tienen texto extraíble.
+8. **Evidencia completa**: la pestaña `PAGINAS` conserva el texto completo y el mapa de cada página para que una clasificación imperfecta nunca destruya información.
+
+La prioridad es **extraer primero y clasificar después**. Si una regla no sabe clasificar un dato, el dato sigue guardado en bruto.
+
+## Automatización
+
+- Workflow `ND Worker` automático y manual.
+- Procesa PDFs grandes por bloques de páginas con checkpoint/resume.
+- Varios PDFs pueden continuar en ejecuciones sucesivas; no se paraleliza el mismo PDF.
+- El PDF fuente de Drive nunca se modifica.
+- El PDF local es temporal y se elimina al terminar.
+- No escribe extracción en Supabase.
 - NE no participa.
 
-GitHub Free incluye 2.000 minutos mensuales para repositorios privados con runners estándar; por eso esta arquitectura evita Render Workers pagos y mantiene el extractor dentro del objetivo de costo cero mientras haya cuota disponible. citehttps://docs.github.com/es/billing/concepts/product-billing/github-actions
-
-## Secretos necesarios
-
-En `Settings → Secrets and variables → Actions` del repositorio:
+## Secretos
 
 - `GOOGLE_SERVICE_ACCOUNT_JSON`
 - `CARPETA_MADRE_DRIVE_ID`
 - `ND_SHEETS_FOLDER_ID`
-- `GEMINI_API_KEY`
+- `ND_SHEETS_BOOTSTRAP_URL`
+- `ND_SHEETS_BOOTSTRAP_TOKEN`
 
-**Importante:** `ND_SHEETS_FOLDER_ID` debe ser una carpeta de destino separada de la carpeta que contiene los PDFs. Compartí esa carpeta de destino con el service account como **Editor**. La carpeta de PDFs puede permanecer compartida como **Reader**.
+No se necesita `GEMINI_API_KEY`.
 
-Para que el panel web pueda lanzar workflows, en Vercel se configurarán:
+## Salida
 
-- `GITHUB_ACTIONS_TOKEN`
-- `ND_PANEL_SECRET`
-- `GITHUB_OWNER=estebanmocho9-lab`
-- `GITHUB_REPO=ARKON-ND-EXTRACTOR`
+Cada PDF produce un Google Sheet `ARKON_ND_<nombre>` con `DOCUMENTO`, `PAGINAS`, `HALLAZGOS_RAW` y las pestañas ND categorizadas.
 
-El token de GitHub debe tener permiso para disparar Actions en este repositorio privado.
-
-## Estructura de salida
-
-Cada PDF produce un Google Sheet `ARKON_ND_<nombre>` con pestañas documentales: `DOCUMENTO`, `HALLAZGOS_RAW`, `MATERIALES`, `COMPONENTES`, `PROPIEDADES`, `MAGNITUDES`, `ATRIBUTOS`, `RELACIONES`, `CONDICIONES`, `METODOS`, `INSTRUMENTOS`, `APLICACIONES`, `COMPORTAMIENTOS`, `NORMAS`, `DEFINICIONES`, `EVIDENCIAS`, `FORMULAS` y `ENTIDADES_DOCUMENTALES`.
-
-Cada hallazgo conserva entidad concreta, aspecto, dato documental, texto original, página, sección, contexto y evidencia.
+`PAGINAS` es la capa de auditoría exhaustiva: texto completo + coordenadas + bloques + encabezados + tablas + enlaces + imágenes + estado OCR.
 
 ## Estado
 
-La base web, el worker Drive→Gemini→Sheets y la automatización diaria ya están implementados. Falta únicamente cargar los secretos y desplegar el panel en Vercel.
+El extractor ND está migrado al motor determinístico espacial. El siguiente paso operativo es ejecutar una prueba con un PDF real y revisar densidad/cobertura antes de lanzar el lote completo.
