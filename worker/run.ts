@@ -1,70 +1,99 @@
-import * as fs from 'node:fs';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import pdf from 'pdf-parse';
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { listPdfs, downloadPdf } from './drive';
 import { appendFindings, appendPages, getOrCreateSheet, setDocumentStatus } from './sheets';
 import { getJob, saveJob } from './control';
+import { createMemory, processNeuralChunk, compressMemory } from './neural';
+import { loadKnowledge } from './knowledge';
+import { appendNeuralMemory, ensureNeuralSheets } from './neuralSheets';
 
-const execFileAsync=promisify(execFile);
 const PAGE_CHUNK=Number(process.env.ND_PAGES_PER_CHUNK||10);
 const MAX_PAGES=Number(process.env.ND_MAX_PAGES_PER_RUN||80);
 const MAX_MINUTES=Number(process.env.ND_MAX_MINUTES_PER_RUN||50);
+const PY_TIMEOUT=Number(process.env.ND_PYTHON_TIMEOUT_MS||600_000);
 
-function assertNDOnlyDestination(){
-  const forbidden=['SUPABASE_URL','SUPABASE_KEY','SUPABASE_SERVICE_ROLE_KEY','TURSO_DATABASE_URL','TURSO_AUTH_TOKEN','TURSO_DB_URL'];
-  const active=forbidden.filter(k=>Boolean(process.env[k]?.trim()));
-  if(active.length) throw new Error(`ND bloqueada: se detectaron destinos prohibidos (${active.join(', ')}). ND solo puede escribir en Google Sheets.`);
+function assertNDOnly(){
+  // Supabase/Turso pueden estar presentes únicamente como fuentes de conocimiento.
+  // Este worker no importa ningún cliente de escritura ni ejecuta mutaciones contra ellos.
+  if(process.env.ND_ALLOW_DB_WRITES==='true')throw new Error('ND bloqueada: ND_ALLOW_DB_WRITES=true está prohibido.');
+  if(process.env.ND_WRITE_DESTINATION?.trim())throw new Error('ND bloqueada: ND_WRITE_DESTINATION no debe configurarse.');
 }
 
-async function deterministicExtract(file:string,fromPage:number,toPage:number){
-  const {stdout}=await execFileAsync('python3',[path.join(process.cwd(),'worker','deterministic_extractor.py'),file,String(fromPage),String(toPage)],{maxBuffer:80*1024*1024,timeout:Math.max(120_000,Number(process.env.ND_PYTHON_TIMEOUT_MS||600_000)),env:{...process.env,PYTHONWARNINGS:'ignore'}});
-  const lines=stdout.trim().split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
-  const jsonLine=[...lines].reverse().find(line=>line.startsWith('{')&&line.endsWith('}'));
-  if(!jsonLine) throw new Error(`El extractor no devolvió JSON válido. Salida: ${stdout.slice(0,1000)}`);
-  return JSON.parse(jsonLine);
+function deterministicExtract(buffer:Buffer,fromPage:number,toPage:number):Promise<any>{
+  return new Promise((resolve,reject)=>{
+    const child=spawn('python3',[path.join(process.cwd(),'worker','deterministic_stream.py'),String(fromPage),String(toPage)],{cwd:path.join(process.cwd(),'worker'),env:{...process.env,PYTHONWARNINGS:'ignore'},stdio:['pipe','pipe','pipe']});
+    let stdout='';let stderr='';
+    const timer=setTimeout(()=>{child.kill('SIGKILL');reject(new Error(`Extractor Python excedió ${PY_TIMEOUT} ms`));},PY_TIMEOUT);
+    child.stdout.on('data',d=>{stdout+=d.toString();if(stdout.length>100*1024*1024){clearTimeout(timer);child.kill('SIGKILL');reject(new Error('Salida del extractor demasiado grande'));}});
+    child.stderr.on('data',d=>{stderr+=d.toString();});
+    child.on('error',e=>{clearTimeout(timer);reject(e)});
+    child.on('close',code=>{
+      clearTimeout(timer);
+      if(code!==0){reject(new Error(`Extractor Python terminó con código ${code}. ${stderr.slice(0,2000)}`));return;}
+      const lines=stdout.trim().split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
+      const jsonLine=[...lines].reverse().find(x=>x.startsWith('{')&&x.endsWith('}'));
+      if(!jsonLine){reject(new Error(`Extractor sin JSON. stderr=${stderr.slice(0,1000)}`));return;}
+      try{resolve(JSON.parse(jsonLine))}catch(e){reject(new Error(`JSON inválido del extractor: ${e instanceof Error?e.message:e}`))}
+    });
+    child.stdin.on('error',()=>{});
+    child.stdin.end(buffer);
+  });
 }
 
-async function processDoc(doc:any,budget:{pages:number,started:number}){
-  const job=await getJob(doc.id,doc.name);
-  if(job.status==='completado') return;
-  const tmp=path.join(os.tmpdir(),`nd-${doc.id}.pdf`);
-  console.log(`ND | ${doc.name} | desde página ${job.nextPage}`);
-  fs.writeFileSync(tmp,await downloadPdf(doc.id));
+async function processDoc(doc:any,budget:{pages:number;started:number},sheetId:string,knowledge:any[]){
+  const job=await getJob(doc.id,doc.name);if(job.status==='completado')return;
+  const neuron=`ND-${String(doc.sourceFolder||'00').padStart(2,'0')}`;
+  console.log(`ND | ${neuron} | ${doc.name} | desde página ${job.nextPage}`);
+  const buffer=await downloadPdf(doc.id);
   try{
-    const meta=await pdf(fs.readFileSync(tmp));
-    const total=meta.numpages||0;
-    let sheetId=job.spreadsheetId||await getOrCreateSheet(doc.id,doc.name);
+    const meta=await pdf(buffer);const total=meta.numpages||0;
+    const memory=createMemory(doc.id,doc.name,neuron);
     await setDocumentStatus(sheetId,doc.id,doc.name,'procesando',0);
-    let next=job.nextPage; let findingsTotal=0;
-    while(next<=total && budget.pages<MAX_PAGES && (Date.now()-budget.started)<MAX_MINUTES*60_000){
+    let next=job.nextPage;let findingsTotal=0;
+    while(next<=total&&budget.pages<MAX_PAGES&&(Date.now()-budget.started)<MAX_MINUTES*60_000){
       const to=Math.min(next+PAGE_CHUNK-1,total);
-      console.log(`ND | mapa espacial determinístico | ${next}-${to}/${total}`);
-      const result=await deterministicExtract(tmp,next,to);
-      const pages=result.pages||[]; const findings=result.findings||[];
+      console.log(`ND | ${neuron} | micro-neuronas RAM | mapa ${next}-${to}/${total}`);
+      const result=await deterministicExtract(buffer,next,to);
+      const pages=result.pages||[];const raw=result.findings||[];
+      const neural=processNeuralChunk(raw,memory,knowledge,next,neuron);
       await appendPages(sheetId,doc.id,doc.name,pages);
-      await appendFindings(sheetId,doc.id,doc.name,findings);
-      findingsTotal+=findings.length;
-      const processed=to-next+1; budget.pages+=processed; next=to+1;
+      await appendFindings(sheetId,doc.id,doc.name,neural);
+      findingsTotal+=neural.length;
+      budget.pages+=to-next+1;next=to+1;
       await saveJob({driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:next>total?'completado':'procesando'});
-      console.log(`ND | ${doc.name} | ${to}/${total} | paginas=${processed} | hallazgos=${findings.length}`);
+      console.log(`ND | ${neuron} | ${doc.name} | ${to}/${total} | hallazgos=${neural.length} | coords=${memory.coordinates.length}`);
     }
-    const status=next>total?'completado':'pausado';
-    await setDocumentStatus(sheetId,doc.id,doc.name,status,findingsTotal);
-    await saveJob({driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status});
-  } finally {try{fs.unlinkSync(tmp)}catch{}}
+    if(next>total){
+      const compressed=compressMemory(memory);
+      await appendNeuralMemory(sheetId,memory);
+      await setDocumentStatus(sheetId,doc.id,doc.name,'completado',findingsTotal);
+      await saveJob({driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:'completado'});
+      console.log(`ND | ${neuron} | MEMORIA RAM comprimida/liberada | paginas=${compressed.pages.length} | hallazgos=${compressed.findings} | coordenadas=${compressed.coordinates.length}`);
+    }else{
+      await setDocumentStatus(sheetId,doc.id,doc.name,'pausado',findingsTotal);
+      await saveJob({driveId:doc.id,name:doc.name,spreadsheetId:sheetId,nextPage:next,totalPages:total,status:'procesando'});
+    }
+  }finally{
+    // El PDF vive únicamente en RAM durante este documento; no se escribe a /tmp.
+    buffer.fill(0);
+  }
 }
 
 async function main(){
-  assertNDOnlyDestination();
+  assertNDOnly();
   const folder=process.env.CARPETA_MADRE_DRIVE_ID;if(!folder)throw new Error('Falta CARPETA_MADRE_DRIVE_ID');
-  const requested=process.env.ND_DOCUMENTO_ID?.trim();const docs=await listPdfs(folder);
-  const selected=requested?docs.filter(d=>d.id===requested||d.name.toLowerCase().includes(requested.toLowerCase())):docs;
-  if(!selected.length)throw new Error(requested?`No se encontró el documento: ${requested}`:'No hay PDFs disponibles');
+  const requested=process.env.ND_DOCUMENTO_ID?.trim();
+  const requestedNeuron=process.env.ND_NEURONA?.trim().padStart(2,'0');
+  const docs=(await listPdfs(folder)).filter(d=>!requestedNeuron||d.sourceFolder===requestedNeuron).filter(d=>!requested||(d.id===requested||d.name.toLowerCase().includes(requested.toLowerCase())));
+  if(!docs.length)throw new Error(requested?`No se encontró el documento: ${requested}`:requestedNeuron?`No se encontraron PDFs en la neurona ${requestedNeuron}`:'No hay PDFs disponibles');
+  const sheetId=await getOrCreateSheet('', 'ND');
+  await ensureNeuralSheets(sheetId);
+  console.log('ND | cargando conocimiento externo en modo SOLO LECTURA...');
+  const knowledge=await loadKnowledge();
+  console.log(`ND | conocimiento de referencia cargado: ${knowledge.length} registros (sin persistencia de extracción)`);
   const budget={pages:0,started:Date.now()};
-  for(const doc of selected){if(budget.pages>=MAX_PAGES||(Date.now()-budget.started)>=MAX_MINUTES*60_000)break;await processDoc(doc,budget);}
-  console.log(`ND FIN | paginas procesadas=${budget.pages} | minutos=${Math.round((Date.now()-budget.started)/6000)/10}`);
+  for(const doc of docs){if(budget.pages>=MAX_PAGES||(Date.now()-budget.started)>=MAX_MINUTES*60_000)break;await processDoc(doc,budget,sheetId,knowledge);}
+  console.log(`ND FIN | paginas procesadas=${budget.pages} | minutos=${Math.round((Date.now()-budget.started)/6000)/10} | destino=Google Sheets | DB=solo lectura`);
 }
 main().catch(e=>{console.error('ND ERROR:',e?.stack||e?.message||e);process.exit(1)});
