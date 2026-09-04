@@ -14,8 +14,11 @@ const MAX_PAGES=Number(process.env.ND_MAX_PAGES_PER_RUN||80);
 const MAX_MINUTES=Number(process.env.ND_MAX_MINUTES_PER_RUN||50);
 
 async function deterministicExtract(file:string,fromPage:number,toPage:number){
- const {stdout}=await execFileAsync('python3',[path.join(process.cwd(),'worker','deterministic_extractor.py'),file,String(fromPage),String(toPage)],{maxBuffer:80*1024*1024,timeout:Math.max(120_000,Number(process.env.ND_PYTHON_TIMEOUT_MS||600_000))});
- return JSON.parse(stdout);
+ const {stdout}=await execFileAsync('python3',[path.join(process.cwd(),'worker','deterministic_extractor.py'),file,String(fromPage),String(toPage)],{maxBuffer:80*1024*1024,timeout:Math.max(120_000,Number(process.env.ND_PYTHON_TIMEOUT_MS||600_000)),env:{...process.env,PYTHONWARNINGS:'ignore'}});
+ const lines=stdout.trim().split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+ const jsonLine=[...lines].reverse().find(line=>line.startsWith('{')&&line.endsWith('}'));
+ if(!jsonLine) throw new Error(`El extractor no devolvió JSON válido. Salida: ${stdout.slice(0,1000)}`);
+ return JSON.parse(jsonLine);
 }
 
 async function processDoc(doc:any,budget:{pages:number,started:number}){
