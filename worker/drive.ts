@@ -25,16 +25,18 @@ async function listChildren(parentId:string){
   return out;
 }
 export async function listPdfs(parent:string):Promise<NDDocument[]> {
-  const out:NDDocument[]=[]; const queue=[folderId(parent)]; const seen=new Set<string>();
+  const out:NDDocument[]=[]; const queue:Array<{id:string;neuron?:string}>=[{id:folderId(parent)}]; const seen=new Set<string>();
   while(queue.length){
-    const current=queue.shift()!; if(seen.has(current)) continue; seen.add(current);
-    const children=await listChildren(current);
+    const current=queue.shift()!; if(seen.has(current.id)) continue; seen.add(current.id);
+    const children=await listChildren(current.id);
     for(const f of children){
       if(!f.id||!f.name) continue;
-      if(f.mimeType==='application/vnd.google-apps.folder') queue.push(f.id);
-      else if(f.mimeType==='application/pdf') out.push({id:f.id,name:f.name,mimeType:'application/pdf',sizeMB:f.size?Math.round(Number(f.size)/1048576*100)/100:0});
+      if(f.mimeType==='application/vnd.google-apps.folder'){
+        const neuron=/^(0[1-9]|10)$/.test(f.name.trim())?f.name.trim():current.neuron;
+        queue.push({id:f.id,neuron});
+      } else if(f.mimeType==='application/pdf') out.push({id:f.id,name:f.name,mimeType:'application/pdf',sizeMB:f.size?Math.round(Number(f.size)/1048576*100)/100:0,sourceFolder:current.neuron});
     }
   }
-  return out.sort((a,b)=>a.name.localeCompare(b.name));
+  return out.sort((a,b)=>(a.sourceFolder||'99').localeCompare(b.sourceFolder||'99')||a.name.localeCompare(b.name));
 }
 export async function downloadPdf(id:string){ const r:any=await drive.files.get({fileId:id,alt:'media'},{responseType:'arraybuffer'}); return Buffer.from(r.data); }
