@@ -13,6 +13,12 @@ const PAGE_CHUNK=Number(process.env.ND_PAGES_PER_CHUNK||10);
 const MAX_PAGES=Number(process.env.ND_MAX_PAGES_PER_RUN||80);
 const MAX_MINUTES=Number(process.env.ND_MAX_MINUTES_PER_RUN||50);
 
+function assertNDOnlyDestination(){
+ const forbidden=['SUPABASE_URL','SUPABASE_KEY','SUPABASE_SERVICE_ROLE_KEY','TURSO_DATABASE_URL','TURSO_AUTH_TOKEN','TURSO_DB_URL'];
+ const active=forbidden.filter(k=>Boolean(process.env[k]?.trim()));
+ if(active.length) throw new Error(`ND bloqueada: se detectaron destinos prohibidos (${active.join(', ')}). ND solo puede escribir en Google Sheets.`);
+}
+
 async function deterministicExtract(file:string,fromPage:number,toPage:number){
  const {stdout}=await execFileAsync('python3',[path.join(process.cwd(),'worker','deterministic_extractor.py'),file,String(fromPage),String(toPage)],{maxBuffer:80*1024*1024,timeout:Math.max(120_000,Number(process.env.ND_PYTHON_TIMEOUT_MS||600_000)),env:{...process.env,PYTHONWARNINGS:'ignore'}});
  const lines=stdout.trim().split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
@@ -35,7 +41,7 @@ async function processDoc(doc:any,budget:{pages:number,started:number}){
   let next=job.nextPage;
   while(next<=total && budget.pages<MAX_PAGES && (Date.now()-budget.started)<MAX_MINUTES*60_000){
    const to=Math.min(next+PAGE_CHUNK-1,total);
-   console.log(`ND | mapa espacial | ${next}-${to}/${total}`);
+   console.log(`ND | mapa espacial determinístico | ${next}-${to}/${total}`);
    const result=await deterministicExtract(tmp,next,to);
    await appendPages(sheetId,doc.id,doc.name,result.pages||[]);
    await appendFindings(sheetId,doc.id,doc.name,result.findings||[]);
@@ -50,6 +56,7 @@ async function processDoc(doc:any,budget:{pages:number,started:number}){
 }
 
 async function main(){
+ assertNDOnlyDestination();
  const folder=process.env.CARPETA_MADRE_DRIVE_ID;if(!folder)throw new Error('Falta CARPETA_MADRE_DRIVE_ID');
  const requested=process.env.ND_DOCUMENTO_ID?.trim();const docs=await listPdfs(folder);
  const selected=requested?docs.filter(d=>d.id===requested||d.name.toLowerCase().includes(requested.toLowerCase())):docs;
