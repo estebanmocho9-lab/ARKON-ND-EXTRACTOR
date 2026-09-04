@@ -3,6 +3,7 @@ import type { NDFinding } from './types';
 
 const TABS=['DOCUMENTO','HALLAZGOS_RAW','MATERIALES','COMPONENTES','PROPIEDADES','MAGNITUDES','ATRIBUTOS','RELACIONES','CONDICIONES','METODOS','INSTRUMENTOS','APLICACIONES','COMPORTAMIENTOS','NORMAS','DEFINICIONES','EVIDENCIAS','FORMULAS','ENTIDADES_DOCUMENTALES'];
 const HEAD=['drive_id','documento','tipo','campo','entidad','aspecto','dato_documental','texto_original','texto_normalizado','valor','valor_texto','unidad','simbolo','contexto','pagina','seccion','confianza','evidencia_json','metadatos_json'];
+const KIND_TO_TAB:any={MATERIAL:'MATERIALES',COMPONENTE:'COMPONENTES',PROPIEDAD:'PROPIEDADES',MAGNITUD:'MAGNITUDES',ATRIBUTO:'ATRIBUTOS',RELACION:'RELACIONES',CONDICION:'CONDICIONES',METODO:'METODOS',INSTRUMENTO:'INSTRUMENTOS',APLICACION:'APLICACIONES',COMPORTAMIENTO:'COMPORTAMIENTOS',NORMA:'NORMAS',DEFINICION:'DEFINICIONES',EVIDENCIA:'EVIDENCIAS',FORMULA:'FORMULAS',ENTIDAD:'ENTIDADES_DOCUMENTALES'};
 function getAuth(){const raw=process.env.GOOGLE_SERVICE_ACCOUNT_JSON;if(!raw)throw new Error('Falta GOOGLE_SERVICE_ACCOUNT_JSON');const c=JSON.parse(raw);return new google.auth.GoogleAuth({credentials:{client_email:c.client_email,private_key:c.private_key},scopes:['https://www.googleapis.com/auth/drive','https://www.googleapis.com/auth/spreadsheets']});}
 const auth=getAuth();const sheets=google.sheets({version:'v4',auth});const drive=google.drive({version:'v3',auth});
 const ensured=new Set<string>();
@@ -42,8 +43,38 @@ export async function getOrCreateSheet(driveId:string,name:string){
  if(!id) id=await bootstrapAsUser(name);
  await ensure(id);return id;
 }
-export async function appendFindings(id:string,driveId:string,name:string,findings:NDFinding[]){if(!findings.length)return;const all=rows(name,driveId,findings);for(let i=0;i<all.length;i+=500){await sheets.spreadsheets.values.append({spreadsheetId:id,range:'HALLAZGOS_RAW!A:S',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:all.slice(i,i+500)}});}
- const map:any={MATERIAL:'MATERIALES',COMPONENTE:'COMPONENTES',PROPIEDAD:'PROPIEDADES',MAGNITUD:'MAGNITUDES',ATRIBUTO:'ATRIBUTOS',RELACION:'RELACIONES',CONDICION:'CONDICIONES',METODO:'METODOS',INSTRUMENTO:'INSTRUMENTOS',APLICACION:'APLICACIONES',COMPORTAMIENTO:'COMPORTAMIENTOS',NORMA:'NORMAS',DEFINICION:'DEFINICIONES',EVIDENCIA:'EVIDENCIAS',FORMULA:'FORMULAS',ENTIDAD:'ENTIDADES_DOCUMENTALES'};
- for(const [kind,tab] of Object.entries(map)){const rs=findings.filter(x=>x.kind===kind);const rr=rows(name,driveId,rs);for(let i=0;i<rr.length;i+=500)await sheets.spreadsheets.values.append({spreadsheetId:id,range:`${tab}!A:S`,valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rr.slice(i,i+500)}});}
+
+function normalizeKind(kind:string):string{
+ const k=String(kind||'').trim().toUpperCase();
+ if(KIND_TO_TAB[k]) return k;
+ // Compatibilidad con lotes antiguos. No inventa una categoría: solo traduce tipos inequívocos.
+ if(k==='PROPERTY') return 'PROPIEDAD';
+ if(k==='MAGNITUDE') return 'MAGNITUD';
+ if(k==='DEFINITION') return 'DEFINICION';
+ if(k==='MATERIAL') return 'MATERIAL';
+ if(k==='COMPONENT') return 'COMPONENTE';
+ if(k==='RELATION') return 'RELACION';
+ if(k==='CONDITION' || k==='REQUIREMENT') return 'CONDICION';
+ if(k==='METHOD') return 'METODO';
+ if(k==='INSTRUMENT') return 'INSTRUMENTO';
+ if(k==='APPLICATION') return 'APLICACION';
+ if(k==='BEHAVIOR') return 'COMPORTAMIENTO';
+ if(k==='STANDARD' || k==='NORM') return 'NORMA';
+ if(k==='FORMULA') return 'FORMULA';
+ if(k==='EVIDENCE') return 'EVIDENCIA';
+ if(k==='ATTRIBUTE') return 'ATRIBUTO';
+ if(k==='ENTITY') return 'ENTIDAD';
+ return '';
+}
+
+export async function appendFindings(id:string,driveId:string,name:string,findings:NDFinding[]){
+ if(!findings.length)return;
+ const normalized=findings.map(h=>({...h,kind:normalizeKind(h.kind)}));
+ const all=rows(name,driveId,normalized);for(let i=0;i<all.length;i+=500){await sheets.spreadsheets.values.append({spreadsheetId:id,range:'HALLAZGOS_RAW!A:S',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:all.slice(i,i+500)}});}
+ for(const [kind,tab] of Object.entries(KIND_TO_TAB)){
+  const rs=normalized.filter(x=>x.kind===kind);
+  const rr=rows(name,driveId,rs);
+  for(let i=0;i<rr.length;i+=500)await sheets.spreadsheets.values.append({spreadsheetId:id,range:`${tab}!A:S`,valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rr.slice(i,i+500)}});
+ }
 }
 export async function setDocumentStatus(id:string,driveId:string,name:string,status:string,total:number){await sheets.spreadsheets.values.update({spreadsheetId:id,range:'DOCUMENTO!A2:D2',valueInputOption:'RAW',requestBody:{values:[[driveId,name,status,total]]}});}
