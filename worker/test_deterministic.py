@@ -2,7 +2,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-import fitz
+import pymupdf as fitz
 
 with tempfile.TemporaryDirectory() as td:
     pdf_path=Path(td)/'fixture.pdf'
