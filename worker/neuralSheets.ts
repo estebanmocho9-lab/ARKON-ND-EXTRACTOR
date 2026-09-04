@@ -21,7 +21,7 @@ export async function ensureNeuralSheets(id:string){
   if(requests.length)await sheets.spreadsheets.batchUpdate({spreadsheetId:id,requestBody:{requests}});
   await sheets.spreadsheets.values.batchUpdate({spreadsheetId:id,requestBody:{valueInputOption:'RAW',data:[
     {range:'MAPA_ND!A1:H1',values:[['documento_drive_id','documento','neurona','paginas','hallazgos','coordenadas','resumen_por_tipo','memoria_estado']]},
-    {range:'COORDENADAS_ND!A1:H1',values:[['coordinate_id','documento_drive_id','neurona','pagina','seccion','tipo','entidad','knowledge_id','coordinate_path']]},
+    {range:'COORDENADAS_ND!A1:I1',values:[['coordinate_id','documento_drive_id','neurona','pagina','seccion','tipo','entidad','knowledge_id','coordinate_path']]},
     {range:'MEMORIA_ND!A1:F1',values:[['documento_drive_id','documento','neurona','paginas','hallazgos','estado']]}
   ]}});
   ensured=true;
@@ -29,7 +29,7 @@ export async function ensureNeuralSheets(id:string){
 
 export async function appendNeuralMemory(id:string,m:NDMemory){
   await ensureNeuralSheets(id);
-  const compact:any=(()=>{const x:any={};for(const c of m.coordinates)x[c.kind]=(x[c.kind]||0)+1;return x;})();
+  const compact:any={};for(const c of m.coordinates)compact[c.kind]=(compact[c.kind]||0)+1;
   await sheets.spreadsheets.values.append({spreadsheetId:id,range:'MAPA_ND!A1',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:[[m.documentId,m.documentName,m.neuron,[...m.pages].sort((a,b)=>a-b).join(','),m.findings,m.coordinates.length,JSON.stringify(compact),'cerrada']]}});
   const rows=m.coordinates.map(c=>[c.id,m.documentId,m.neuron,c.page,c.section,c.kind,c.entity,c.knowledgeId,c.path]);
   for(let i=0;i<rows.length;i+=500)if(rows.slice(i,i+500).length)await sheets.spreadsheets.values.append({spreadsheetId:id,range:'COORDENADAS_ND!A1',valueInputOption:'RAW',insertDataOption:'INSERT_ROWS',requestBody:{values:rows.slice(i,i+500)}});
