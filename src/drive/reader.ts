@@ -35,5 +35,9 @@ export async function listarPDFs(carpetaId: string): Promise<ArchivoDrive[]> {
 
 export async function descargarPDF(id: string): Promise<Buffer> {
   const r = await drive.files.get({ fileId: id, alt: 'media' }, { responseType: 'arraybuffer' });
-  return Buffer.from(r.data);
+  const data = r.data;
+  if (Buffer.isBuffer(data)) return data;
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  if (ArrayBuffer.isView(data)) return Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+  return Buffer.from(data as unknown as string);
 }
