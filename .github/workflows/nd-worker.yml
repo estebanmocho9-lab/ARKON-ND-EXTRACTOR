@@ -6,6 +6,14 @@ on:
         description: 'ID o nombre del PDF; vacío = continuar pendientes'
         required: false
         default: ''
+      max_pages:
+        description: 'Páginas máximas en esta ejecución'
+        required: false
+        default: '1'
+      max_minutes:
+        description: 'Minutos máximos en esta ejecución'
+        required: false
+        default: '50'
   schedule:
     - cron: '23 03 * * *'
 concurrency:
@@ -24,9 +32,12 @@ jobs:
       ND_SHEETS_BOOTSTRAP_URL: ${{ secrets.ND_SHEETS_BOOTSTRAP_URL }}
       ND_SHEETS_BOOTSTRAP_TOKEN: ${{ secrets.ND_SHEETS_BOOTSTRAP_TOKEN }}
       ND_DOCUMENTO_ID: ${{ inputs.documento_id }}
+      ND_MAX_PAGES_PER_RUN: ${{ inputs.max_pages || '1' }}
+      ND_MAX_MINUTES_PER_RUN: ${{ inputs.max_minutes || '50' }}
+      ND_PYTHON_TIMEOUT_MS: 600000
+      ND_ALLOW_DB_WRITES: 'false'
+      ND_WRITE_DESTINATION: ''
       ND_PAGES_PER_CHUNK: 10
-      ND_MAX_PAGES_PER_RUN: 80
-      ND_MAX_MINUTES_PER_RUN: 50
       PYTHONUNBUFFERED: '1'
     steps:
       - uses: actions/checkout@v4
